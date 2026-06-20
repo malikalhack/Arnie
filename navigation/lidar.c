@@ -342,11 +342,12 @@ static void lidarParseMeasurement(void) {
             start_cdeg  = (uint16_t)(((uint16_t)parser.param[3] << 8U)
                                      | parser.param[4]);
 
-            /* A full revolution is complete when the start angle wraps 360°→0°. */
+            /* New revolution: start angle wrapped 360°→0°. */
             if (
-                (scan_initialized != 0U)                                  &&
-                (start_cdeg < last_start_cdeg)                            &&
-                ((uint16_t)(last_start_cdeg - start_cdeg) > LIDAR_WRAP_THRESHOLD_CDEG)
+                (scan_initialized != 0U)       &&
+                (start_cdeg < last_start_cdeg) &&
+                ((uint16_t)(last_start_cdeg - start_cdeg) >
+                 LIDAR_WRAP_THRESHOLD_CDEG)
             ) {
                 lidarPublishScan();
             }
@@ -359,13 +360,14 @@ static void lidarParseMeasurement(void) {
                                       | parser.param[base + 2U]);
 
                 if (dist_raw != 0U) {
-                    dist_mm    = (uint16_t)(dist_raw >> 2U);   /* 0.25 mm/LSB → mm */
+                    dist_mm    = (uint16_t)(dist_raw >> 2U); /* 0.25mm/LSB */
                     angle_cdeg = (uint32_t)start_cdeg
                                + (((uint32_t)LIDAR_FRAME_SPAN_CDEG * (uint32_t)i)
                                   / (uint32_t)point_count);
                     sector     = (uint16_t)((angle_cdeg / 100U) % 360U);
 
-                    if ((hist_fill[sector] == 0U) || (dist_mm < hist_fill[sector])) {
+                    if ((hist_fill[sector] == 0U) ||
+                        (dist_mm < hist_fill[sector])) {
                         hist_fill[sector] = dist_mm;
                     }
                 }

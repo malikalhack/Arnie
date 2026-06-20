@@ -10,6 +10,7 @@ project:
   add-path:
     - ../bsp
     - .
+    - ../lib/inc
 
   # List executable file formats to be generated.
   output:
@@ -56,3 +57,9 @@ project:
     - group: Lidar
       files:
         - file: ./lidar.c
+    - group: Scheduler
+      files:
+        - file: ../lib/stm32f1-ac6/acrosched.lib
+          for-compiler: AC6
+        - file: ../lib/stm32f1-gcc/libacrosched.a
+          for-compiler: GCC

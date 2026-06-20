@@ -10,6 +10,7 @@
 #define BSP_H_
 /******************************** Included files ******************************/
 #include <stdint.h>
+#include "acrosched.h"
 /********************************* Definitions *******************************/
 
 /**
@@ -19,6 +20,29 @@
 #define BSP_TICKS_PER_SEC   1000U
 
 /********************* Application Programming Interface *********************/
+
+/**
+ * @brief System tick counter, incremented every 1 ms by the SysTick ISR.
+ * @details Pass &sys_tick to acroInit() as the scheduler time source.
+ *          Defined in bsp.c.
+ */
+extern volatile AcroTick_t sys_tick;
+
+/**
+ * @brief Starts the BSP runtime services: 1 ms SysTick, fault exceptions and
+ *        global interrupts.
+ * @details Call once from main() after reset. SystemInit() has already
+ *          configured clocks, GPIO and USART1 before main runs; this routine
+ *          brings up the timebase used by the scheduler. Kept as a named,
+ *          platform-portable entry point (each port provides its own).
+ */
+void bspStart(void);
+
+/**
+ * @brief Returns a coherent snapshot of the system tick counter.
+ * @returns Current value of the system tick counter.
+ */
+AcroTick_t bspGetTick(void);
 
 /**
  * @brief Get the system core clock frequency.

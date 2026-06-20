@@ -41,6 +41,12 @@
 
 /****************************** Module variables ******************************/
 
+/**
+ * @brief System tick counter incremented every 1 ms by SysTick_Handler.
+ * @details Used as the time source for the AcroSched cooperative scheduler.
+ */
+volatile AcroTick_t sys_tick = 0U;
+
 static unsigned int system_clock_hz __attribute__((section(".bss.noinit")));
 
 /***************************** Private prototypes *****************************/
@@ -57,6 +63,12 @@ static void rcc_config(void);
 
 /** @brief Configures GPIO pins used by the BSP. */
 static void gpio_config(void);
+
+/**
+ * @brief Configures SysTick for 1 kHz operation.
+ * @param[in] ticks - reload value (core-clock ticks per period).
+ */
+static void systick_config(unsigned int ticks);
 
 /** @brief Initializes the Data Watchpoint and Trace (DWT) unit. */
 static void dwt_init(void);
@@ -112,6 +124,18 @@ void SystemInit(void) {
 
     /* Initialize DWT cycle counter */
     dwt_init();
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn get_system_core_clock */
+unsigned int get_system_core_clock(void) {
+    return system_clock_hz;
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspStart */
+void bspStart(void) {
+    systick_config(system_clock_hz / BSP_TICKS_PER_SEC);
 
     /* Enable the configurable fault exceptions (MemManage, BusFault,
      * UsageFault) so they trap to their own handlers in handlers.c instead
@@ -124,9 +148,16 @@ void SystemInit(void) {
 }
 /*----------------------------------------------------------------------------*/
 
-/** @fn get_system_core_clock */
-unsigned int get_system_core_clock(void) {
-    return system_clock_hz;
+/** @fn bspGetTick */
+AcroTick_t bspGetTick(void) {
+    /* A 32-bit aligned read is atomic on Cortex-M3. */
+    return sys_tick;
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn SysTick_Handler */
+void SysTick_Handler(void) {
+    sys_tick++;
 }
 /*----------------------------------------------------------------------------*/
 
@@ -196,7 +227,7 @@ static void gpio_config(void) {
      */
     GPIOC->CRH = (GPIOC->CRH & ~(0xFUL << 20U))
                | (0x2UL << 20U);   /* PC13 user LED */
-    GPIOC->ODR |= (1UL << 13U);    /* LED OFF initially (active LOW → drive HIGH) */
+    GPIOC->ODR |= (1UL << 13U);    /* LED OFF (active LOW: drive HIGH) */
 
 #ifdef UART_ENABLED
     /*
@@ -209,6 +240,21 @@ static void gpio_config(void) {
                | (0xBUL << 4U)    /* PA9  TX: AF-PP 50 MHz */
                | (0x4UL << 8U);   /* PA10 RX: float input  */
 #endif /* UART_ENABLED */
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn systick_config */
+static void systick_config(unsigned int ticks) {
+    if ((ticks - 1U) > 0xFFFFFFU) {
+        return;
+    }
+
+    SysTick->LOAD = (unsigned int)(ticks - 1U);
+    NVIC_SetPriority(SysTick_IRQn, (1UL << __NVIC_PRIO_BITS) - 1UL);
+    SysTick->VAL  = 0U;
+    SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk |
+                    SysTick_CTRL_TICKINT_Msk    |
+                    SysTick_CTRL_ENABLE_Msk;
 }
 /*----------------------------------------------------------------------------*/
 
