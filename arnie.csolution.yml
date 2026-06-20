@@ -5,16 +5,26 @@ solution:
 
   # Compilers that can be selected
   select-compiler:
-    - compiler: AC6
-    - compiler: GCC
+    - compiler: AC6@6.20.1
+    - compiler: GCC@15.2.1
 
   # List of miscellaneous tool-specific controls
   misc:
-    - for-compiler: AC6 # GDB requires DWARF 4, remove when using uVision Debugger
+    - for-compiler: AC6 # Using DWARF 4 for better GDB compatibility
       C-CPP:
         - -gdwarf-4
       ASM:
         - -gdwarf-4
+        - -Wa,armasm,--diag_suppress=A1950W
+    - for-compiler: GCC
+      C-CPP:
+        - -ffunction-sections
+        - -fdata-sections
+        - -Wall
+        - -Wextra
+      Link:
+        - -Wl,--gc-sections
+        - -Wl,--print-memory-usage
 
   # List the packs that define the device and/or board.
   packs:
@@ -25,17 +35,31 @@ solution:
   target-types:
     - type: STM32F103C8
       device: STM32F103C8
+      target-set:
+        - set:
+          images:
+            - project-context: lidar.Debug
 
   # List of different build configurations.
   build-types:
     - type: Debug
       debug: on
       optimize: none
-
+      define:
+        - DEBUG
     - type: Release
       debug: off
-      optimize: balanced
+      misc:
+        - for-compiler: AC6
+          C-CPP:
+            - -Os
+        - for-compiler: GCC
+          C-CPP:
+            - -Os
 
-  # List related projects.
+    # List related projects.
   projects:
     - project: navigation/navigation.cproject.yml
+  # Default compiler used when --toolchain is not specified.
+  # NOTE: passing --toolchain GCC will print "redefinition" warnings � this is harmless.
+  compiler: AC6@6.20.1

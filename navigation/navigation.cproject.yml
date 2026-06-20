@@ -1,16 +1,10 @@
 # A project translates into one executable or library.
 project:
-  
-  groups:
-    - group: Source Files
-      files:
-        - file: ./main.c
 
   # List components to use for your application.
   # A software component is a re-usable unit that may be configurable.
   components:
     - component: ARM::CMSIS:CORE
-    - component: Device:Startup
 
   # List executable file formats to be generated.
   output:
@@ -18,3 +12,39 @@ project:
       - elf
       - hex
       - map
+
+  misc:
+    - for-compiler: AC6
+      C:
+        - -std=c11
+      Link:
+        - --map
+        - --load_addr_map_info
+        - --xref
+        - --callgraph
+        - --symbols
+        - --info sizes
+        - --info totals
+        - --info unused
+        - --info veneers
+        - --strict
+        - --summary_stderr
+        - --info summarysizes
+    - for-compiler: GCC
+      C:
+        - -std=c11
+
+  groups:
+    - group: Source Files
+      files:
+        - file: ../app/main.c
+        - file: ../app/syscalls.c
+          for-compiler: GCC
+    - group: BSP
+      files:
+        - file: ../bsp/bsp.c
+        - file: ../bsp/handlers.c
+        - file: ../bsp/startup_stm32f103xb_ac6.S
+          for-compiler: AC6
+        - file: ../bsp/startup_stm32f103xb_gcc.S
+          for-compiler: GCC
