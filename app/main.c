@@ -1,7 +1,22 @@
-#include "RTE_Components.h"
-#include CMSIS_device_header
+/**
+ * @file    main.c
+ * @version 0.1.0
+ * @authors Anton Chernov
+ * @date    2026-06-19
+ * @date    @showdate "%Y-%m-%d"
+ */
 
-int main() {
+/******************************** Included files ******************************/
+#include "lidar.h"
+
+/********************* Application Programming Interface *********************/
+
+/** @fn main */
+int main(void) {
+    lidarInit();
+
     for (;;) {
+        lidarProcess();
     }
 }
+/******************************************************************************/

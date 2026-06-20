@@ -31,12 +31,12 @@
 
 /*
  * USART1 is on APB2 (72 MHz).
- * USARTDIV = FCLK / (16 × BAUD) = 72000000 / (16 × 115200) = 39.0625
- * DIV_Mantissa = 39, DIV_Fraction = round(0.0625 × 16) = 1
- * BRR = (39 << 4) | 1 = 625  →  actual baud ≈ 115200 (error ≈ 0 %)
+ * USARTDIV = FCLK / (16 × BAUD) = 72000000 / (16 × 230400) = 19.53125
+ * DIV_Mantissa = 19, DIV_Fraction = round(0.53125 × 16) = 9
+ * BRR = (19 << 4) | 9 = 313  →  actual baud ≈ 230032 (error ≈ 0.16 %)
  */
-#define BAUD_RATE               115200U
-#define BRR_VALUE               625U
+#define BAUD_RATE               230400U
+#define BRR_VALUE               313U
 
 
 /****************************** Module variables ******************************/
@@ -57,12 +57,6 @@ static void rcc_config(void);
 
 /** @brief Configures GPIO pins used by the BSP. */
 static void gpio_config(void);
-
-/**
- * @brief Configures SysTick for 1 kHz operation.
- * @param[in] ticks - reload value (core-clock ticks per period).
- */
-static void systick_config(unsigned int ticks);
 
 /** @brief Initializes the Data Watchpoint and Trace (DWT) unit. */
 static void dwt_init(void);
@@ -92,7 +86,7 @@ void SystemInit(void) {
     /* Configure Flash latency (must be done before raising SYSCLK) */
     flash_config();
 
-    /* Configure PLL and switch SYSCLK to 24 MHz */
+    /* Configure PLL and switch SYSCLK to 72 MHz */
     rcc_config();
 
     /* Configure GPIO ports */
@@ -118,18 +112,6 @@ void SystemInit(void) {
 
     /* Initialize DWT cycle counter */
     dwt_init();
-}
-/*----------------------------------------------------------------------------*/
-
-/** @fn get_system_core_clock */
-unsigned int get_system_core_clock(void) {
-    return system_clock_hz;
-}
-/*----------------------------------------------------------------------------*/
-
-/** @fn bspInit */
-void bspInit(void) {
-    systick_config(system_clock_hz / BSP_TICKS_PER_SEC);
 
     /* Enable the configurable fault exceptions (MemManage, BusFault,
      * UsageFault) so they trap to their own handlers in handlers.c instead
@@ -139,6 +121,12 @@ void bspInit(void) {
                    SCB_SHCSR_USGFAULTENA_Msk);
 
     __enable_irq();
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn get_system_core_clock */
+unsigned int get_system_core_clock(void) {
+    return system_clock_hz;
 }
 /*----------------------------------------------------------------------------*/
 
@@ -221,21 +209,6 @@ static void gpio_config(void) {
                | (0xBUL << 4U)    /* PA9  TX: AF-PP 50 MHz */
                | (0x4UL << 8U);   /* PA10 RX: float input  */
 #endif /* UART_ENABLED */
-}
-/*----------------------------------------------------------------------------*/
-
-/** @fn systick_config */
-static void systick_config(unsigned int ticks) {
-    if ((ticks - 1U) > 0xFFFFFFU) {
-        return;
-    }
-
-    SysTick->LOAD = (unsigned int)(ticks - 1U);
-    NVIC_SetPriority(SysTick_IRQn, (1UL << __NVIC_PRIO_BITS) - 1UL);
-    SysTick->VAL  = 0U;
-    SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk |
-                    SysTick_CTRL_TICKINT_Msk    |
-                    SysTick_CTRL_ENABLE_Msk;
 }
 /*----------------------------------------------------------------------------*/
 

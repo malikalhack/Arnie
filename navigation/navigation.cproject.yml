@@ -6,6 +6,11 @@ project:
   components:
     - component: ARM::CMSIS:CORE
 
+  # Header search paths shared by all source groups.
+  add-path:
+    - ../bsp
+    - .
+
   # List executable file formats to be generated.
   output:
     type:
@@ -48,3 +53,6 @@ project:
           for-compiler: AC6
         - file: ../bsp/startup_stm32f103xb_gcc.S
           for-compiler: GCC
+    - group: Lidar
+      files:
+        - file: ./lidar.c
