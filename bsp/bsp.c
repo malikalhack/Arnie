@@ -1,6 +1,6 @@
 /**
  * @file    bsp.c
- * @version 0.1.0
+ * @version 0.2.0
  * @authors Anton Chernov
  * @date    2026-06-19
  * @date    @showdate "%Y-%m-%d"
@@ -37,6 +37,15 @@
  */
 #define BAUD_RATE               230400U
 #define BRR_VALUE               313U
+
+/*
+ * Debug console on USART2 (APB1 = 36 MHz), 115200 8N1.
+ * USARTDIV = 36000000 / (16 × 115200) = 19.53125
+ * DIV_Mantissa = 19, DIV_Fraction = round(0.53125 × 16) = 9
+ * BRR = (19 << 4) | 9 = 313  →  actual baud ≈ 115033 (error ≈ 0.16 %)
+ */
+#define DEBUG_BAUD_RATE         115200U
+#define DEBUG_BRR_VALUE         313U
 
 
 /****************************** Module variables ******************************/
@@ -75,8 +84,9 @@ static void dwt_init(void);
 
 #ifdef UART_ENABLED
 /**
- * @brief Configures USART1 for 115200 8N1 on PA9/PA10.
- * @note  USART1 is clocked from APB2 at 24 MHz.
+ * @brief Configures USART1 (lidar link, 230400 8N1) and USART2 (debug
+ *        console, 115200 8N1).
+ * @note  USART1 is clocked from APB2 (72 MHz), USART2 from APB1 (36 MHz).
  */
 static void uart_config(void);
 #endif /* UART_ENABLED */
@@ -205,9 +215,11 @@ static void rcc_config(void) {
     while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL);
 
     /* Enable peripheral clocks */
-    RCC->APB2ENR |= RCC_APB2ENR_IOPAEN    /* GPIOA — USART1 pins */
-                  | RCC_APB2ENR_IOPCEN    /* GPIOC — user LED    */
-                  | RCC_APB2ENR_USART1EN; /* USART1              */
+    RCC->APB2ENR |= RCC_APB2ENR_IOPAEN    /* GPIOA — USART1/2 pins */
+                  | RCC_APB2ENR_IOPCEN    /* GPIOC — user LED      */
+                  | RCC_APB2ENR_USART1EN; /* USART1 — lidar link   */
+
+    RCC->APB1ENR |= RCC_APB1ENR_USART2EN; /* USART2 — debug console */
 
     system_clock_hz = SYSTEM_CLOCK_HZ;
 }
@@ -239,6 +251,13 @@ static void gpio_config(void) {
     GPIOA->CRH = (GPIOA->CRH & ~(0xFFUL << 4U))
                | (0xBUL << 4U)    /* PA9  TX: AF-PP 50 MHz */
                | (0x4UL << 8U);   /* PA10 RX: float input  */
+
+    /*
+     * PA2 (USART2_TX, debug): AF push-pull, 50 MHz → CNF=10, MODE=11 → 0xB
+     *                         bits [11:8] of GPIOA->CRL
+     */
+    GPIOA->CRL = (GPIOA->CRL & ~(0xFUL << 8U))
+               | (0xBUL << 8U);   /* PA2 TX: AF-PP 50 MHz */
 #endif /* UART_ENABLED */
 }
 /*----------------------------------------------------------------------------*/
@@ -270,12 +289,13 @@ static void dwt_init(void) {
 
 /** @fn uart_config */
 static void uart_config(void) {
-    /*
-     * BRR = 208 for 115200 baud at PCLK2 = 24 MHz
-     * (DIV_Mantissa = 13, DIV_Fraction = 0)
-     */
+    /* USART1 — lidar link, 230400 8N1 (receiver feeds the DMA). */
     USART1->BRR = BRR_VALUE;
     USART1->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE;
+
+    /* USART2 — debug console on PA2, 115200 8N1 (transmitter only). */
+    USART2->BRR = DEBUG_BRR_VALUE;
+    USART2->CR1 = USART_CR1_UE | USART_CR1_TE;
 }
 #endif /* UART_ENABLED */
 
@@ -296,8 +316,8 @@ void turn_off_led_green(void) {
 /** @fn uartSendChar */
 void uartSendChar(char c) {
 #ifdef UART_ENABLED
-    while ((USART1->SR & USART_SR_TXE) == 0U) { }
-    USART1->DR = (uint8_t)c;
+    while ((USART2->SR & USART_SR_TXE) == 0U) { }
+    USART2->DR = (uint8_t)c;
 #else
     (void)c;
 #endif /* UART_ENABLED */

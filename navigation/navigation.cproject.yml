@@ -57,6 +57,9 @@ project:
     - group: Lidar
       files:
         - file: ./lidar.c
+    - group: Compass
+      files:
+        - file: ./compass.c
     - group: Scheduler
       files:
         - file: ../lib/stm32f1-ac6/acrosched.lib

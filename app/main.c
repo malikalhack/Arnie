@@ -1,6 +1,6 @@
 /**
  * @file    main.c
- * @version 0.3.0
+ * @version 0.4.0
  * @authors Anton Chernov
  * @date    2026-06-19
  * @date    @showdate "%Y-%m-%d"
@@ -9,6 +9,7 @@
 /******************************** Included files ******************************/
 #include "bsp.h"
 #include "lidar.h"
+#include "compass.h"
 #include "acrosched.h"
 #include "acrosched_defs.h"
 
@@ -72,6 +73,7 @@ static void taskLidar(AcroParam_t pParam) {
 static void taskHeartbeat(AcroParam_t pParam) {
     static uint8_t  uc_led_on = 0U;
     const uint16_t *pScan;
+    uint16_t        hdg;
 
     UNUSED(pParam);
 
@@ -92,6 +94,13 @@ static void taskHeartbeat(AcroParam_t pParam) {
     uartSendUint16(pScan[0]);
     uartSendStr(" mm  speed=");
     uartSendUint8(lidarGetSpeedRaw());
+
+    compassProcess();
+    hdg = compassGetHeadingDeci();
+    uartSendStr("  hdg=");
+    uartSendUint16((uint16_t)(hdg / 10U));
+    uartSendChar('.');
+    uartSendUint8((uint8_t)(hdg % 10U));
     uartSendStr("\r\n");
 }
 /*----------------------------------------------------------------------------*/
@@ -102,6 +111,7 @@ static void taskHeartbeat(AcroParam_t pParam) {
 int main(void) {
     bspStart();
     lidarInit();
+    compassInit();
 
     CHECK_STATUS(acroInit(&sys_tick));
     CHECK_STATUS(acroAddTask(
