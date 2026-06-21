@@ -78,6 +78,12 @@ void uartSendUint8(uint8_t n);
  */
 void uartSendUint16(uint16_t n);
 
+/**
+ * @brief Transmits an unsigned 8-bit integer as two hexadecimal digits.
+ * @param[in] n - value to transmit (0..255).
+ */
+void uartSendHex8(uint8_t n);
+
 /** @brief Turn on the on-board LED (PC13, active-low). */
 void turn_on_led_green(void);
 

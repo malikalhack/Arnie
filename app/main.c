@@ -16,6 +16,15 @@
 /********************************* Definitions ********************************/
 
 /**
+ * @def COMPASS_ENABLED
+ * @brief Set to 1 once the HMC5883L magnetometer is fitted on the I2C bus.
+ * @details While 0 the compass is not initialised or polled and no heading
+ *          telemetry is emitted, avoiding a permanent cfault and idle I2C
+ *          traffic.
+ */
+#define COMPASS_ENABLED         0U
+
+/**
  * @def HEARTBEAT_PERIOD_MS
  * @brief Period of the heartbeat / telemetry task in milliseconds.
  */
@@ -73,7 +82,12 @@ static void taskLidar(AcroParam_t pParam) {
 static void taskHeartbeat(AcroParam_t pParam) {
     static uint8_t  uc_led_on = 0U;
     const uint16_t *pScan;
+    uint16_t        usIdx;
+    uint16_t        usMin;
+    uint16_t        usCount;
+#if (COMPASS_ENABLED == 1)
     uint16_t        hdg;
+#endif /* COMPASS_ENABLED */
 
     UNUSED(pParam);
 
@@ -86,21 +100,37 @@ static void taskHeartbeat(AcroParam_t pParam) {
         uc_led_on = 1U;
     }
 
-    pScan = lidarGetScan();
+    pScan   = lidarGetScan();
+    usCount = 0U;
+    usMin   = 0U;
+    for (usIdx = 0U; usIdx < LIDAR_SECTOR_COUNT; usIdx++) {
+        if (pScan[usIdx] != 0U) {
+            usCount++;
+            if ((usMin == 0U) || (pScan[usIdx] < usMin)) {
+                usMin = pScan[usIdx];
+            }
+        }
+    }
 
     uartSendStr("scans=");
     uartSendUint16((uint16_t)lidarGetScanCount());
-    uartSendStr(" front=");
-    uartSendUint16(pScan[0]);
+    uartSendStr(" pts=");
+    uartSendUint16(usCount);
+    uartSendStr(" min=");
+    uartSendUint16(usMin);
     uartSendStr(" mm  speed=");
     uartSendUint8(lidarGetSpeedRaw());
 
+#if (COMPASS_ENABLED == 1)
     compassProcess();
     hdg = compassGetHeadingDeci();
     uartSendStr("  hdg=");
     uartSendUint16((uint16_t)(hdg / 10U));
     uartSendChar('.');
     uartSendUint8((uint8_t)(hdg % 10U));
+    uartSendStr(" cfault=");
+    uartSendUint8(compassGetFault());
+#endif /* COMPASS_ENABLED */
     uartSendStr("\r\n");
 }
 /*----------------------------------------------------------------------------*/
@@ -111,7 +141,9 @@ static void taskHeartbeat(AcroParam_t pParam) {
 int main(void) {
     bspStart();
     lidarInit();
+#if (COMPASS_ENABLED == 1)
     compassInit();
+#endif /* COMPASS_ENABLED */
 
     CHECK_STATUS(acroInit(&sys_tick));
     CHECK_STATUS(acroAddTask(

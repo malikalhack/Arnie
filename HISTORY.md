@@ -116,4 +116,51 @@ Records key decisions, structural changes, and completed phases.
   planned (REQ-013..019) for the motion / navigation / hardening phases.
 - `HISTORY.md` created (this file).
 
+### Lidar checksum fix — all-zero telemetry resolved
+- **Root cause** — the frame parser validated frames with a cumulative byte
+  **sum**, but the Delta-2B actually uses a **Modbus CRC16** (poly 0xA001,
+  init 0xFFFF) over bytes 0xAA … last param byte. Every frame failed the sum
+  check, so no scan was ever published (telemetry read all zeros).
+- **Fix** — incremental CRC16 in `lidarChecksumByte()` (running `parser.crc`),
+  with the cumulative `parser.sum` kept in parallel. `lidarFrameChecksum()`
+  selects CRC when the address byte (`parser.proto`, buf[3]) `< 1`, else the
+  sum (the device-info frame 0xAC is sent once at start-up with PROTO = 0x01
+  and uses the sum). Compared big-endian (`CheckHi << 8 | CheckLo`).
+- After the fix: scans increment ~7 Hz, ~250–308 of 360 sectors populated,
+  min distance tracks real obstacles (133–263 mm) — **lidar fully working**.
+- **Doc discrepancy recorded** — the workspace `.odt` protocol doc wrongly
+  describes a cumulative-sum checksum (its worked example verifies as a sum);
+  real hardware + SDK use CRC16. Captured in repo memory.
+- **Lesson** — the earlier slow ~110 B/s "garbage" stream was environmental
+  noise (mouse/laptop nearby injecting spurious 0xAA bytes), not the lidar; the
+  real lidar streams ~13.6 KB/s.
+
+### Debug-console bug fixed (`uartSendUint8`)
+- For values ≥ 100 the routine only handled 0–99, so `'0' + (n / 10)` produced
+  punctuation (`:`,`;`,`<`,`=`,`>`). Raw speed ~139 printed as `=8`.
+- Rewritten to emit hundreds / tens / units correctly for the full 0–255 range.
+  Speed now prints as `139` (≈ 6.9 r/s ≈ 414 rpm).
+
+### Diagnostics cleanup
+- Removed all lidar bring-up instrumentation now that the link works: the
+  `dbg rx=` / `raw=` / `rxpulse=` telemetry lines, the `lidarGetRxBytes` and
+  `lidarGetRawCapture` getters, `bspMeasureRxBitCycles`, and the parser scratch
+  fields (`rx_total`, `dbg_raw`, `dbg_raw_len`, `dbg_armed`).
+- Kept `uartSendHex8` (general I2C register-dump utility) and the `cfault`
+  field for future compass work.
+- Telemetry reduced to one clean line:
+  `scans=N pts=P min=M mm  speed=S`.
+
+### Compass disabled until hardware arrives
+- The **HMC5883L** is not yet on the board; a unit was ordered and arrives end
+  of week. The driver (`compass.c`, I2C 0x1E) is complete and ready to run.
+- Compass made compile-time optional via `COMPASS_ENABLED` in `main.c`
+  (set to `0` for now). With it off, `compassInit`/`compassProcess` and the
+  heading telemetry are skipped and the linker drops `compass.c` (AC6 Debug
+  Code 8722 → 5186, GCC Debug ROM 8280 → 4916 B). Flip to `1` when the
+  magnetometer is fitted.
+
+### Build status
+- Both toolchains pass throughout: **AC6 2 succeeded, GCC 2 succeeded.**
+
 ---

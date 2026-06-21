@@ -19,8 +19,9 @@
  *            Header(0xAA) Length(2) Version(0x00) Type(0x61) Command(1)
  *            ParamLength(2) Parameter(N) CheckCode(2)
  *          Length counts every byte up to (not including) the check code, i.e.
- *          Length = 8 + ParamLength. The check code is a 16-bit cumulative sum
- *          of all Length-covered bytes.
+ *          Length = 8 + ParamLength. The check code is a Modbus CRC16 over the
+ *          Length-covered bytes (a cumulative sum when the address code is
+ *          nonzero).
  */
 
 /******************************** Included files ******************************/
@@ -41,12 +42,6 @@
  * @brief Fixed frame type byte.
  */
 #define LIDAR_FRAME_TYPE            0x61U
-
-/**
- * @def LIDAR_PROTO_VERSION
- * @brief Expected protocol version byte.
- */
-#define LIDAR_PROTO_VERSION         0x00U
 
 /**
  * @def LIDAR_CMD_MEASUREMENT
@@ -126,7 +121,9 @@ typedef struct SLidarParser {
     uint16_t      length;                   /**< Length field value            */
     uint16_t      param_len;                /**< ParamLength field value       */
     uint16_t      param_idx;                /**< parameter bytes collected     */
-    uint16_t      checksum;                 /**< running 16-bit cumulative sum  */
+    uint16_t      crc;                      /**< running Modbus CRC16           */
+    uint16_t      sum;                      /**< running cumulative byte sum    */
+    uint8_t       proto;                    /**< address / prototype code       */
     uint16_t      rx_check;                 /**< received check code           */
     uint8_t       command;                  /**< command word                  */
     uint8_t       param[LIDAR_PARAM_MAX];   /**< parameter byte buffer         */
@@ -152,6 +149,18 @@ static void lidarDmaInit(void);
 
 /** @brief Resets the frame parser to wait for a new header. */
 static void lidarResetParser(void);
+
+/**
+ * @brief Updates the running frame checksums (CRC16 and sum) with one byte.
+ * @param[in] b - byte to fold into the checksums.
+ */
+static void lidarChecksumByte(uint8_t b);
+
+/**
+ * @brief Returns the expected frame checksum for the current address code.
+ * @returns Modbus CRC16 when the address code is 0, else the cumulative sum.
+ */
+static uint16_t lidarFrameChecksum(void);
 
 /**
  * @brief Feeds one received byte into the frame parser state machine.
@@ -196,7 +205,39 @@ static void lidarDmaInit(void) {
 static void lidarResetParser(void) {
     parser.state     = eLidarWaitHeader;
     parser.param_idx = 0U;
-    parser.checksum  = 0U;
+    parser.crc       = 0xFFFFU;
+    parser.sum       = 0U;
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn lidarChecksumByte */
+static void lidarChecksumByte(uint8_t b) {
+    uint8_t i;
+
+    parser.crc ^= (uint16_t)b;
+    for (i = 0U; i < 8U; i++) {
+        if ((parser.crc & 0x0001U) != 0U) {
+            parser.crc = (uint16_t)((parser.crc >> 1U) ^ 0xA001U);
+        }
+        else {
+            parser.crc = (uint16_t)(parser.crc >> 1U);
+        }
+    }
+    parser.sum = (uint16_t)(parser.sum + b);
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn lidarFrameChecksum */
+static uint16_t lidarFrameChecksum(void) {
+    uint16_t ret_val;
+
+    if (parser.proto < 1U) {
+        ret_val = parser.crc;
+    }
+    else {
+        ret_val = parser.sum;
+    }
+    return ret_val;
 }
 /*----------------------------------------------------------------------------*/
 
@@ -205,36 +246,34 @@ static void lidarFeedByte(uint8_t b) {
     switch (parser.state) {
     case eLidarWaitHeader:
         if (b == LIDAR_FRAME_HEADER) {
-            parser.checksum  = b;
+            parser.crc       = 0xFFFFU;
+            parser.sum       = 0U;
+            lidarChecksumByte(b);
             parser.param_idx = 0U;
             parser.state     = eLidarLengthHi;
         }
         break;
 
     case eLidarLengthHi:
-        parser.length    = (uint16_t)((uint16_t)b << 8U);
-        parser.checksum += b;
-        parser.state     = eLidarLengthLo;
+        parser.length = (uint16_t)((uint16_t)b << 8U);
+        lidarChecksumByte(b);
+        parser.state  = eLidarLengthLo;
         break;
 
     case eLidarLengthLo:
-        parser.length   |= (uint16_t)b;
-        parser.checksum += b;
-        parser.state     = eLidarVersion;
+        parser.length |= (uint16_t)b;
+        lidarChecksumByte(b);
+        parser.state   = eLidarVersion;
         break;
 
     case eLidarVersion:
-        parser.checksum += b;
-        if (b == LIDAR_PROTO_VERSION) {
-            parser.state = eLidarType;
-        }
-        else {
-            parser.state = eLidarWaitHeader;
-        }
+        lidarChecksumByte(b);
+        parser.proto = b;            /* address / prototype code */
+        parser.state = eLidarType;
         break;
 
     case eLidarType:
-        parser.checksum += b;
+        lidarChecksumByte(b);
         if (b == LIDAR_FRAME_TYPE) {
             parser.state = eLidarCommand;
         }
@@ -244,20 +283,20 @@ static void lidarFeedByte(uint8_t b) {
         break;
 
     case eLidarCommand:
-        parser.checksum += b;
-        parser.command   = b;
-        parser.state     = eLidarParamLenHi;
+        lidarChecksumByte(b);
+        parser.command = b;
+        parser.state   = eLidarParamLenHi;
         break;
 
     case eLidarParamLenHi:
         parser.param_len = (uint16_t)((uint16_t)b << 8U);
-        parser.checksum += b;
+        lidarChecksumByte(b);
         parser.state     = eLidarParamLenLo;
         break;
 
     case eLidarParamLenLo:
         parser.param_len |= (uint16_t)b;
-        parser.checksum  += b;
+        lidarChecksumByte(b);
         if (
             (parser.param_len <= LIDAR_PARAM_MAX)                       &&
             (parser.length    == (LIDAR_FRAME_OVERHEAD + parser.param_len))
@@ -275,8 +314,8 @@ static void lidarFeedByte(uint8_t b) {
         break;
 
     case eLidarParam:
-        parser.checksum               += b;
-        parser.param[parser.param_idx]  = b;
+        lidarChecksumByte(b);
+        parser.param[parser.param_idx] = b;
         parser.param_idx++;
         if (parser.param_idx >= parser.param_len) {
             parser.state = eLidarCheckHi;
@@ -290,7 +329,7 @@ static void lidarFeedByte(uint8_t b) {
 
     case eLidarCheckLo:
         parser.rx_check |= (uint16_t)b;
-        if (parser.rx_check == parser.checksum) {
+        if (parser.rx_check == lidarFrameChecksum()) {
             lidarHandleFrame();
         }
         parser.state = eLidarWaitHeader;

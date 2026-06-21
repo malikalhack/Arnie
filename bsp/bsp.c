@@ -335,8 +335,11 @@ void uartSendStr(const char *str) {
 
 /** @fn uartSendUint8 */
 void uartSendUint8(uint8_t n) {
+    if (n >= 100U) {
+        uartSendChar((char)('0' + (n / 100U)));
+    }
     if (n >= 10U) {
-        uartSendChar((char)('0' + (n / 10U)));
+        uartSendChar((char)('0' + ((n / 10U) % 10U)));
     }
     uartSendChar((char)('0' + (n % 10U)));
 }
@@ -356,5 +359,14 @@ void uartSendUint16(uint16_t n) {
             ucStarted = 1U;
         }
     }
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn uartSendHex8 */
+void uartSendHex8(uint8_t n) {
+    static const char hex[] = "0123456789ABCDEF";
+
+    uartSendChar(hex[(n >> 4U) & 0x0FU]);
+    uartSendChar(hex[n & 0x0FU]);
 }
 /******************************************************************************/

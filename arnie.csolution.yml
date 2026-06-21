@@ -38,7 +38,7 @@ solution:
       target-set:
         - set:
           images:
-            - project-context: lidar.Debug
+            - project-context: navigation.Debug
 
   # List of different build configurations.
   build-types:
