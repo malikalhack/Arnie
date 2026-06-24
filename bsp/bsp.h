@@ -1,6 +1,6 @@
 /**
  * @file    bsp.h
- * @version 0.4.0
+ * @version 0.6.0
  * @authors Anton Chernov
  * @date    2026-06-19
  * @date    @showdate "%Y-%m-%d"
@@ -77,6 +77,13 @@ void uartSendUint8(uint8_t n);
  * @param[in] n - value to transmit (0..65535).
  */
 void uartSendUint16(uint16_t n);
+
+/**
+ * @brief Transmits a signed 16-bit integer as decimal digits over UART.
+ * @details Negative values are prefixed with '-'; leading zeros are suppressed.
+ * @param[in] n - value to transmit (-32768..32767).
+ */
+void uartSendInt16(int16_t n);
 
 /**
  * @brief Transmits an unsigned 8-bit integer as two hexadecimal digits.
@@ -177,6 +184,31 @@ void bspMotorSetDutyB(uint16_t fwd, uint16_t rev);
  * @param[in] enable - nonzero to arm (SD high), 0 to disable (SD low).
  */
 void bspMotorEnable(uint8_t enable);
+
+/*---------------------------- Wheel encoders -------------------------------*/
+
+/**
+ * @brief Brings up TIM2 and TIM3 as ×4 quadrature encoder interfaces.
+ * @details Encoder A on TIM2 (PA0 = CH1/A, PA1 = CH2/B); encoder B on TIM3
+ *          (PA6 = CH1/A, PA7 = CH2/B). Each timer counts on both edges of both
+ *          channels (encoder mode 3), so the hardware 16-bit counter tracks
+ *          signed wheel travel and direction without CPU intervention.
+ */
+void bspEncoderInit(void);
+
+/**
+ * @brief Returns the raw 16-bit quadrature count of encoder A (TIM2).
+ * @details Free-running, wraps modulo 65536. A driver takes the signed
+ *          difference between successive reads to obtain travel and direction.
+ * @returns Current counter value.
+ */
+uint16_t bspEncoderCountA(void);
+
+/**
+ * @brief Returns the raw 16-bit quadrature count of encoder B (TIM3).
+ * @returns Current counter value.
+ */
+uint16_t bspEncoderCountB(void);
 
 /*****************************************************************************/
 #endif //! BSP_H_

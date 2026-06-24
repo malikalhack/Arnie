@@ -63,6 +63,9 @@ project:
     - group: Motor
       files:
         - file: ./motor.c
+    - group: Encoder
+      files:
+        - file: ./encoder.c
     - group: Scheduler
       files:
         - file: ../lib/stm32f1-ac6/acrosched.lib

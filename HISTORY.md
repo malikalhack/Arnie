@@ -200,4 +200,27 @@ Records key decisions, structural changes, and completed phases.
   - **TIM1 is an advanced timer** — its outputs stay high-Z until
     `BDTR.MOE = 1`, so `bspMotorInit()` sets the main-output-enable bit.
 
+### Wheel encoder driver (×4 quadrature)
+- `navigation/encoder.c` / `encoder.h` (v0.1.0): signed speed + odometry from
+  the **hardware ×4 quadrature counters**. Encoder A on **TIM2 (PA0/PA1)**,
+  encoder B on **TIM3 (PA6/PA7)**, encoder mode 3 (counts both edges of both
+  channels) so direction and travel are tracked with no CPU load.
+- `encoderProcess()` takes the **signed 16-bit counter delta** between calls
+  (wrap-safe), accumulates it into an odometry position and converts it into a
+  signed **rev/min** (frequency method); all non-blocking. Geometry constants:
+  100 ppr × 4 (quadrature) × ≈15 (gear) = **6000 counts / wheel-rev**
+  (gear ratio to be calibrated on the bench).
+- BSP side (`bspEncoderInit`, raw count getters): brings up TIM2/TIM3 as the
+  encoder interfaces.
+
+### Integration
+- `main.c` gained compile-time switches **`MOTOR_ENABLED`** and
+  **`ENCODER_ENABLED`** (both `0` until the hardware is wired), mirroring
+  `COMPASS_ENABLED`: while off, the peripherals are not initialised and the
+  linker drops the unused drivers.
+
+### Build status
+- Both toolchains pass: **AC6 2 succeeded, GCC 2 succeeded.**
+
 ---
+

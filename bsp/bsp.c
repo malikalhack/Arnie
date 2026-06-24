@@ -1,6 +1,6 @@
 /**
  * @file    bsp.c
- * @version 0.3.0
+ * @version 0.5.0
  * @authors Anton Chernov
  * @date    2026-06-19
  * @date    @showdate "%Y-%m-%d"
@@ -80,6 +80,14 @@
  * @brief GPIOB pin of the Motor B IR2184 shutdown/enable line.
  */
 #define MOTOR_B_SD_PIN          14U
+
+/**
+ * @def ENC_ARR
+ * @brief Auto-reload for the quadrature encoder counters (full 16-bit span).
+ * @details The counters free-run and wrap modulo 65536; a driver takes the
+ *          signed difference between successive reads to recover travel.
+ */
+#define ENC_ARR                 0xFFFFU
 
 
 /****************************** Module variables ******************************/
@@ -422,6 +430,21 @@ void uartSendUint16(uint16_t n) {
 }
 /*----------------------------------------------------------------------------*/
 
+/** @fn uartSendInt16 */
+void uartSendInt16(int16_t n) {
+    uint16_t usMag;
+
+    if (n < 0) {
+        uartSendChar('-');
+        usMag = (uint16_t)(-(int32_t)n);
+    }
+    else {
+        usMag = (uint16_t)n;
+    }
+    uartSendUint16(usMag);
+}
+/*----------------------------------------------------------------------------*/
+
 /** @fn uartSendHex8 */
 void uartSendHex8(uint8_t n) {
     static const char hex[] = "0123456789ABCDEF";
@@ -638,5 +661,63 @@ void bspMotorEnable(uint8_t enable) {
         /* SD low forces both bridges into shutdown (coast). */
         GPIOB->BRR = (1UL << MOTOR_A_SD_PIN) | (1UL << MOTOR_B_SD_PIN);
     }
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspEncoderInit */
+void bspEncoderInit(void) {
+    RCC->APB2ENR |= RCC_APB2ENR_IOPAEN;     /* GPIOA — encoder inputs */
+    RCC->APB1ENR |= RCC_APB1ENR_TIM2EN      /* TIM2 — encoder A       */
+                  | RCC_APB1ENR_TIM3EN;     /* TIM3 — encoder B       */
+
+    /*
+     * Encoder A: PA0 = TIM2_CH1 (A), PA1 = TIM2_CH2 (B).
+     * Encoder B: PA6 = TIM3_CH1 (A), PA7 = TIM3_CH2 (B).
+     * All four lines floating input (CNF=01, MODE=00 → 0x4).
+     * PA0=CRL[3:0], PA1=CRL[7:4], PA6=CRL[27:24], PA7=CRL[31:28].
+     */
+    GPIOA->CRL = (GPIOA->CRL & ~((0xFUL << 0U)  | (0xFUL << 4U)
+                               | (0xFUL << 24U) | (0xFUL << 28U)))
+               | (0x4UL << 0U)  | (0x4UL << 4U)
+               | (0x4UL << 24U) | (0x4UL << 28U);
+
+    /*
+     * TIM2 — encoder A. CH1←TI1, CH2←TI2; encoder mode 3 (SMS=011) counts on
+     * both edges of both channels (×4). The counter holds signed wheel travel.
+     */
+    TIM2->PSC   = 0U;
+    TIM2->ARR   = ENC_ARR;
+    TIM2->CCMR1 = TIM_CCMR1_CC1S_0 | TIM_CCMR1_CC2S_0       /* IC1←TI1, IC2←TI2 */
+                | TIM_CCMR1_IC1F_0 | TIM_CCMR1_IC1F_1       /* input filters    */
+                | TIM_CCMR1_IC2F_0 | TIM_CCMR1_IC2F_1;
+    TIM2->CCER  = 0U;                                       /* both edges rising */
+    TIM2->SMCR  = TIM_SMCR_SMS_0 | TIM_SMCR_SMS_1;          /* encoder mode 3   */
+    TIM2->EGR   = TIM_EGR_UG;
+    TIM2->CNT   = 0U;
+    TIM2->CR1   = TIM_CR1_CEN;
+
+    /* TIM3 — encoder B (identical configuration). */
+    TIM3->PSC   = 0U;
+    TIM3->ARR   = ENC_ARR;
+    TIM3->CCMR1 = TIM_CCMR1_CC1S_0 | TIM_CCMR1_CC2S_0
+                | TIM_CCMR1_IC1F_0 | TIM_CCMR1_IC1F_1
+                | TIM_CCMR1_IC2F_0 | TIM_CCMR1_IC2F_1;
+    TIM3->CCER  = 0U;
+    TIM3->SMCR  = TIM_SMCR_SMS_0 | TIM_SMCR_SMS_1;
+    TIM3->EGR   = TIM_EGR_UG;
+    TIM3->CNT   = 0U;
+    TIM3->CR1   = TIM_CR1_CEN;
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspEncoderCountA */
+uint16_t bspEncoderCountA(void) {
+    return (uint16_t)TIM2->CNT;
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspEncoderCountB */
+uint16_t bspEncoderCountB(void) {
+    return (uint16_t)TIM3->CNT;
 }
 /******************************************************************************/

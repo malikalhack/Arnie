@@ -1,6 +1,6 @@
 /**
  * @file    main.c
- * @version 0.4.0
+ * @version 0.5.0
  * @authors Anton Chernov
  * @date    2026-06-19
  * @date    @showdate "%Y-%m-%d"
@@ -11,6 +11,7 @@
 #include "lidar.h"
 #include "compass.h"
 #include "motor.h"
+#include "encoder.h"
 #include "acrosched.h"
 #include "acrosched_defs.h"
 
@@ -33,6 +34,14 @@
  *          bridges remain disabled.
  */
 #define MOTOR_ENABLED           0U
+
+/**
+ * @def ENCODER_ENABLED
+ * @brief Set to 1 once the wheel quadrature encoders are wired.
+ * @details While 0 the encoder timers are not initialised and no speed or
+ *          odometry telemetry is emitted.
+ */
+#define ENCODER_ENABLED         0U
 
 /**
  * @def HEARTBEAT_PERIOD_MS
@@ -141,6 +150,13 @@ static void taskHeartbeat(AcroParam_t pParam) {
     uartSendStr(" cfault=");
     uartSendUint8(compassGetFault());
 #endif /* COMPASS_ENABLED */
+#if (ENCODER_ENABLED == 1)
+    encoderProcess();
+    uartSendStr("  rpmA=");
+    uartSendInt16(encoderGetRpmA());
+    uartSendStr(" rpmB=");
+    uartSendInt16(encoderGetRpmB());
+#endif /* ENCODER_ENABLED */
     uartSendStr("\r\n");
 }
 /*----------------------------------------------------------------------------*/
@@ -157,6 +173,9 @@ int main(void) {
 #if (MOTOR_ENABLED == 1)
     motorInit();
 #endif /* MOTOR_ENABLED */
+#if (ENCODER_ENABLED == 1)
+    encoderInit();
+#endif /* ENCODER_ENABLED */
 
     CHECK_STATUS(acroInit(&sys_tick));
     CHECK_STATUS(acroAddTask(
