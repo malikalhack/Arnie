@@ -1,17 +1,19 @@
 /**
  * @file    compass.c
- * @version 0.2.0
+ * @version 0.3.0
  * @authors Anton Chernov
  * @date    2026-06-21
  * @date    @showdate "%Y-%m-%d"
  *
- * @brief   HMC5883L 3-axis magnetometer driver over I2C1 (polled).
+ * @brief   HMC5883L / QMC5883L 3-axis magnetometer driver over I2C1 (polled).
  *
  * @details The sensor sits on I2C1 (PB6 SCL, PB7 SDA) with the module's own
- *          pull-ups. It is configured for 8-sample averaging at 15 Hz in
- *          continuous-measurement mode. Bus transfers are polled with bounded
- *          timeouts so a stuck bus can never hang the cooperative scheduler.
- *          The data registers stream X, Z, Y (signed 16-bit, big-endian); the
+ *          pull-ups. At start-up the driver auto-detects the chip: a Honeywell
+ *          HMC5883L (address 0x1E, signature 'H','4','3') or the pin-compatible
+ *          QST QMC5883L (address 0x0D, chip-ID 0xFF) found on most 4-pin GY-271
+ *          modules. Bus transfers are polled with bounded timeouts so a stuck
+ *          bus can never hang the cooperative scheduler. The HMC streams
+ *          X, Z, Y big-endian; the QMC streams X, Y, Z little-endian. The
  *          heading is derived from the horizontal X/Y components.
  */
 
@@ -94,10 +96,82 @@
 #define HMC_MODE_CONTINUOUS     0x00U
 
 /**
+ * @def QMC_ADDR
+ * @brief 7-bit I2C slave address of the QMC5883L.
+ */
+#define QMC_ADDR                0x0DU
+
+/**
+ * @def QMC_REG_DATA
+ * @brief First data output register (X LSB); order is X, Y, Z, little-endian.
+ */
+#define QMC_REG_DATA            0x00U
+
+/**
+ * @def QMC_REG_CONTROL1
+ * @brief Control register 1 (oversampling, range, output rate, mode).
+ */
+#define QMC_REG_CONTROL1        0x09U
+
+/**
+ * @def QMC_REG_SET_RESET
+ * @brief SET/RESET period register (datasheet mandates 0x01).
+ */
+#define QMC_REG_SET_RESET       0x0BU
+
+/**
+ * @def QMC_REG_CHIP_ID
+ * @brief Chip identification register; reads 0xFF on the QMC5883L.
+ */
+#define QMC_REG_CHIP_ID         0x0DU
+
+/**
+ * @def QMC_CHIP_ID_VAL
+ * @brief Expected chip-ID value of the QMC5883L.
+ */
+#define QMC_CHIP_ID_VAL         0xFFU
+
+/**
+ * @def QMC_CONTROL1_VAL
+ * @brief OSR=512, ±2 Gauss range, 100 Hz output, continuous mode.
+ */
+#define QMC_CONTROL1_VAL        0x09U
+
+/**
+ * @def QMC_SET_RESET_VAL
+ * @brief Recommended SET/RESET period value.
+ */
+#define QMC_SET_RESET_VAL       0x01U
+
+/**
  * @def COMPASS_DATA_LEN
  * @brief Number of data bytes read per sample (X, Z, Y × 2).
  */
 #define COMPASS_DATA_LEN        6U
+
+/**
+ * @def COMPASS_ID_LEN
+ * @brief Number of identification bytes read while probing a device.
+ */
+#define COMPASS_ID_LEN          3U
+
+/**
+ * @def COMPASS_CHIP_NONE
+ * @brief No magnetometer was detected on the bus.
+ */
+#define COMPASS_CHIP_NONE       0U
+
+/**
+ * @def COMPASS_CHIP_HMC
+ * @brief Detected device is a Honeywell HMC5883L.
+ */
+#define COMPASS_CHIP_HMC        1U
+
+/**
+ * @def COMPASS_CHIP_QMC
+ * @brief Detected device is a QST QMC5883L.
+ */
+#define COMPASS_CHIP_QMC        2U
 
 /**
  * @def COMPASS_TWO_PI
@@ -148,11 +222,21 @@ static int16_t  mag_y;
 static int16_t  mag_z;
 static uint16_t heading_deci;
 static uint8_t  compass_fault;
+static uint8_t  compass_chip;
 
 /***************************** Private prototypes *****************************/
 
 /** @brief Recomputes the cached heading from the X/Y components. */
 static void compassUpdateHeading(void);
+
+/**
+ * @brief Detects and configures the magnetometer, setting the fault flag.
+ * @details Resets the I2C bus, probes for an HMC5883L (0x1E) then a QMC5883L
+ *          (0x0D), and on success programs continuous measurement. Safe to
+ *          call repeatedly, so a brittle power-on instant cannot latch the
+ *          fault state permanently.
+ */
+static void compassBringup(void);
 
 /**
  * @brief Four-quadrant arc-tangent approximation (no libm dependency).
@@ -209,40 +293,71 @@ static void compassUpdateHeading(void) {
 
     heading_deci = (uint16_t)(fHeading * COMPASS_RAD_TO_DECIDEG);
 }
+/*----------------------------------------------------------------------------*/
 
-/********************* Application Programming Interface *********************/
-
-/** @fn compassInit */
-void compassInit(void) {
-    uint8_t id[3];
+/** @fn compassBringup */
+static void compassBringup(void) {
+    uint8_t id[COMPASS_ID_LEN];
     uint8_t ucCfgOk;
 
-    mag_x         = 0;
-    mag_y         = 0;
-    mag_z         = 0;
-    heading_deci  = 0U;
     compass_fault = 1U;            /* assume failure until identified */
+    compass_chip  = COMPASS_CHIP_NONE;
 
-    bspI2c1Init();
+    bspI2c1Init();                 /* includes bus recovery */
 
-    if (bspI2c1ReadRegs(HMC_ADDR, HMC_REG_IDENT_A, id, 3U) != 0U) {
+    /* Probe 1 - Honeywell HMC5883L at 0x1E (signature 'H','4','3'). */
+    if (bspI2c1ReadRegs(HMC_ADDR, HMC_REG_IDENT_A, id, COMPASS_ID_LEN) != 0U) {
         if (
             (id[0] == HMC_ID_A) &&
             (id[1] == HMC_ID_B) &&
             (id[2] == HMC_ID_C)
         ) {
-            compass_fault = 0U;
+            compass_chip = COMPASS_CHIP_HMC;
         }
     }
 
-    if (compass_fault == 0U) {
+    /* Probe 2 - QST QMC5883L at 0x0D (chip-ID register reads 0xFF). */
+    if (compass_chip == COMPASS_CHIP_NONE) {
+        if (
+            bspI2c1ReadRegs(QMC_ADDR, QMC_REG_CHIP_ID, id, COMPASS_ID_LEN) != 0U
+        ) {
+            if (id[0] == QMC_CHIP_ID_VAL) {
+                compass_chip = COMPASS_CHIP_QMC;
+            }
+        }
+    }
+
+    /* Configure whichever device answered. */
+    if (compass_chip == COMPASS_CHIP_HMC) {
         ucCfgOk  = bspI2c1WriteReg(HMC_ADDR, HMC_REG_CONFIG_A, HMC_CONFIG_A_VAL);
         ucCfgOk &= bspI2c1WriteReg(HMC_ADDR, HMC_REG_CONFIG_B, HMC_CONFIG_B_VAL);
         ucCfgOk &= bspI2c1WriteReg(HMC_ADDR, HMC_REG_MODE, HMC_MODE_CONTINUOUS);
-        if (ucCfgOk == 0U) {
-            compass_fault = 1U;
+        if (ucCfgOk != 0U) {
+            compass_fault = 0U;
         }
     }
+    else if (compass_chip == COMPASS_CHIP_QMC) {
+        ucCfgOk  = bspI2c1WriteReg(QMC_ADDR, QMC_REG_SET_RESET, QMC_SET_RESET_VAL);
+        ucCfgOk &= bspI2c1WriteReg(QMC_ADDR, QMC_REG_CONTROL1, QMC_CONTROL1_VAL);
+        if (ucCfgOk != 0U) {
+            compass_fault = 0U;
+        }
+    }
+    else {
+        /* No magnetometer detected - leave compass_fault asserted. */
+    }
+}
+
+/********************* Application Programming Interface *********************/
+
+/** @fn compassInit */
+void compassInit(void) {
+    mag_x         = 0;
+    mag_y         = 0;
+    mag_z         = 0;
+    heading_deci  = 0U;
+
+    compassBringup();
 }
 /*----------------------------------------------------------------------------*/
 
@@ -251,13 +366,34 @@ uint8_t compassProcess(void) {
     uint8_t raw[COMPASS_DATA_LEN];
     uint8_t ret_val = 0U;
 
+    if (compass_fault != 0U) {
+        compassBringup();          /* retry detection until the bus settles */
+    }
+
     if (compass_fault == 0U) {
-        if (bspI2c1ReadRegs(HMC_ADDR, HMC_REG_DATA, raw, COMPASS_DATA_LEN) != 0U) {
-            mag_x = (int16_t)(((uint16_t)raw[0] << 8U) | raw[1]);
-            mag_z = (int16_t)(((uint16_t)raw[2] << 8U) | raw[3]);
-            mag_y = (int16_t)(((uint16_t)raw[4] << 8U) | raw[5]);
-            compassUpdateHeading();
-            ret_val = 1U;
+        if (compass_chip == COMPASS_CHIP_HMC) {
+            if (
+                bspI2c1ReadRegs(HMC_ADDR, HMC_REG_DATA, raw, COMPASS_DATA_LEN)
+                    != 0U
+            ) {
+                mag_x = (int16_t)(((uint16_t)raw[0] << 8U) | raw[1]);
+                mag_z = (int16_t)(((uint16_t)raw[2] << 8U) | raw[3]);
+                mag_y = (int16_t)(((uint16_t)raw[4] << 8U) | raw[5]);
+                compassUpdateHeading();
+                ret_val = 1U;
+            }
+        }
+        else {
+            if (
+                bspI2c1ReadRegs(QMC_ADDR, QMC_REG_DATA, raw, COMPASS_DATA_LEN)
+                    != 0U
+            ) {
+                mag_x = (int16_t)(((uint16_t)raw[1] << 8U) | raw[0]);
+                mag_y = (int16_t)(((uint16_t)raw[3] << 8U) | raw[2]);
+                mag_z = (int16_t)(((uint16_t)raw[5] << 8U) | raw[4]);
+                compassUpdateHeading();
+                ret_val = 1U;
+            }
         }
     }
     return ret_val;

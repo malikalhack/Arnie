@@ -224,3 +224,53 @@ Records key decisions, structural changes, and completed phases.
 
 ---
 
+## 2026-06-24
+
+### Compass brought up — module is a QMC5883L clone, not HMC5883L
+- The fitted **GY-271** carries an **"HA5883"** chip: a **QMC5883L-class**
+  device (QST) at I2C address **0x0D**, not the original Honeywell
+  **HMC5883L** at 0x1E the driver targeted. Data registers start at 0x00 and
+  stream **X, Y, Z little-endian** (vs HMC's 0x03 X, Z, Y big-endian).
+- `compass.c` (v0.3.0) reworked to **auto-detect**: it probes the HMC identity
+  ('H','4','3') at 0x1E first, then the QMC chip-ID at 0x0D, configures
+  whichever answers, and branches the data read by chip type. Detection was
+  also made **retryable** — `compassBringup()` is re-invoked from
+  `compassProcess()` while `cfault` is set, so a late-powered or briefly
+  disconnected module recovers without a reset.
+
+### Lidar all-zero after warm RESET — latched overrun
+- After the RST button (not a cold power-up) the lidar reported **scans = 0**
+  permanently. Root cause: USART1 RX is enabled before the DMA is armed, and on
+  a warm reset the lidar is **already streaming**, so the first byte sets the
+  **ORE** (overrun) flag; with ORE latched the USART **withholds DMA requests**
+  forever. Cold start works only because the lidar is still spinning up.
+- **Fix** — clear ORE in `bspLidarRxDmaInit()` (read `SR` then `DR`) before
+  setting `USART_CR3_DMAR`. Warm-reset exchange now starts reliably.
+
+### Compass worked only with a scope probe — SCL slew-rate ringing
+- The magnetometer answered **only** while an oscilloscope tip touched **SCL**
+  (probe ground on board GND); it failed on **both** cold and warm start
+  otherwise. The probe's ~10–15 pF was acting as a snubber.
+- **Root cause** — PB6/PB7 were configured **AF open-drain at 50 MHz** slew
+  (CRL nibble 0xF); the sharp SCL falling edge **rang/undershot** on the
+  breadboard wiring and the slave miscounted clocks.
+- **Fix** — dropped the slew rate to **2 MHz** (nibble 0xE) in `bspI2c1Init()`.
+  The softer edge removes the ringing; 2 MHz is far beyond what the 100 kHz bus
+  needs. The bus now runs without the scope.
+- Hardening also added to `bspI2c1Init()`: a **9-clock bus-recovery** sequence
+  (frees a slave that is holding SDA after a mid-transfer reset) before the
+  pins are switched to AF-OD. External 4.7 kΩ pull-ups are required — the F103
+  provides none on AF-OD pins.
+
+### Diagnostics
+- Added temporary I2C bring-up aids (compile-time `I2C_SCAN_ENABLED` in
+  `main.c`): `bspI2c1Ping()` (address ACK probe), `bspI2c1LineLevels()` (idle
+  SCL/SDA read) and an `i2cBusScan()` that lists every acknowledging address
+  over the debug UART. The scan confirmed the module at **0x0D**. Disabled
+  (`I2C_SCAN_ENABLED 0`) for normal operation; the code is kept behind the
+  guard for future bus work.
+
+### Build status
+- Both toolchains pass: **AC6 2 succeeded, GCC 2 succeeded** (Debug Code 9338).
+
+---

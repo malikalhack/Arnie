@@ -64,6 +64,19 @@
 #define I2C1_TIMEOUT            50000U
 
 /**
+ * @def I2C1_RECOVER_PULSES
+ * @brief Maximum SCL clock pulses issued to free a slave that holds SDA low.
+ */
+#define I2C1_RECOVER_PULSES     9U
+
+/**
+ * @def I2C1_RECOVER_DLY
+ * @brief Busy-wait iterations for one SCL half-period during bus recovery
+ *        (~5 us at 72 MHz → ~100 kHz recovery clock).
+ */
+#define I2C1_RECOVER_DLY        120U
+
+/**
  * @def MOTOR_PWM_RELOAD
  * @brief TIM auto-reload for the 20 kHz PWM carrier (72 MHz / 3600 = 20 kHz).
  */
@@ -367,6 +380,17 @@ static uint8_t i2cWaitSR1(uint16_t flag) {
     return ret_val;
 }
 
+/*----------------------------------------------------------------------------*/
+
+/** @fn i2cBitDelay */
+static void i2cBitDelay(void) {
+    volatile uint32_t ulDelay = I2C1_RECOVER_DLY;
+
+    while (ulDelay != 0U) {
+        ulDelay--;
+    }
+}
+
 /********************* Application Programming Interface *********************/
 
 /** @fn turn_on_led_green */
@@ -469,6 +493,17 @@ void bspLidarRxDmaInit(uint8_t *pBuf, uint16_t len) {
                          | DMA_CCR1_PL_0        /* medium priority  */
                          | DMA_CCR1_EN;         /* enable channel   */
 
+    /*
+     * Clear any overrun/stale byte latched on USART1_RX before the DMA was
+     * routed (e.g. on a warm reset while the radar is already streaming).
+     * While ORE is set the USART withholds DMA requests, so the receive path
+     * would stall and every scan read back as zero. Reading SR then DR clears
+     * ORE/RXNE; cold power-up is unaffected because the radar is still
+     * spinning up and not yet transmitting.
+     */
+    (void)USART1->SR;
+    (void)USART1->DR;
+
     /* Route the USART1 receiver to DMA */
     USART1->CR3 |= USART_CR3_DMAR;
 }
@@ -482,17 +517,57 @@ uint16_t bspLidarRxDmaIndex(uint16_t len) {
 
 /** @fn bspI2c1Init */
 void bspI2c1Init(void) {
+    uint8_t i;
+
     /* Enable GPIOB and I2C1 clocks */
     RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
     RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
 
     /*
-     * PB6 (I2C1_SCL) and PB7 (I2C1_SDA): alternate-function open-drain,
-     * 50 MHz → CNF=11, MODE=11 → 0xF. PB6 = CRL[27:24], PB7 = CRL[31:28].
+     * Bus recovery: after a warm reset the slave may have been left mid-byte
+     * holding SDA low, which wedges the I2C engine (START never completes).
+     * Drive SCL as a GPIO open-drain output, sample SDA as input, and clock
+     * SCL until the slave releases SDA, then frame a manual STOP. External
+     * pull-ups bring the released lines high.
+     */
+    /* PB6 (SCL) GP open-drain 2 MHz = 0x6; PB7 (SDA) floating input = 0x4. */
+    GPIOB->CRL = (GPIOB->CRL & ~((0xFUL << 24U) | (0xFUL << 28U)))
+               | (0x6UL << 24U)    /* PB6 SCL GP-OD out */
+               | (0x4UL << 28U);   /* PB7 SDA input     */
+    GPIOB->BSRR = (1UL << 6U);     /* SCL released (high) */
+    i2cBitDelay();
+
+    for (i = 0U; i < I2C1_RECOVER_PULSES; i++) {
+        if ((GPIOB->IDR & (1UL << 7U)) != 0U) {
+            break;                 /* SDA released → bus is free */
+        }
+        GPIOB->BRR  = (1UL << 6U); /* SCL low  */
+        i2cBitDelay();
+        GPIOB->BSRR = (1UL << 6U); /* SCL high */
+        i2cBitDelay();
+    }
+
+    /* Manual STOP: pull SDA low, then release it high while SCL is high. */
+    GPIOB->CRL = (GPIOB->CRL & ~(0xFUL << 28U))
+               | (0x6UL << 28U);   /* PB7 SDA GP-OD out */
+    GPIOB->BRR  = (1UL << 7U);     /* SDA low  */
+    i2cBitDelay();
+    GPIOB->BSRR = (1UL << 6U);     /* SCL high */
+    i2cBitDelay();
+    GPIOB->BSRR = (1UL << 7U);     /* SDA high → STOP condition */
+    i2cBitDelay();
+
+    /*
+     * PB6 (I2C1_SCL) and PB7 (I2C1_SDA): alternate-function open-drain at the
+     * 2 MHz slew rate (CNF=11, MODE=10 → 0xE). The gentle slew softens the SCL
+     * falling edge to suppress ringing/undershoot on the breadboard wiring
+     * that otherwise made the slave miscount clocks — the bus previously only
+     * worked with a scope probe loading SCL. 2 MHz is far faster than the
+     * 100 kHz bus needs. PB6 = CRL[27:24], PB7 = CRL[31:28].
      */
     GPIOB->CRL = (GPIOB->CRL & ~((0xFUL << 24U) | (0xFUL << 28U)))
-               | (0xFUL << 24U)    /* PB6 SCL */
-               | (0xFUL << 28U);   /* PB7 SDA */
+               | (0xEUL << 24U)    /* PB6 SCL AF-OD 2 MHz */
+               | (0xEUL << 28U);   /* PB7 SDA AF-OD 2 MHz */
 
     /* Software-reset the peripheral, then program standard mode 100 kHz */
     I2C1->CR1   = I2C_CR1_SWRST;
@@ -503,6 +578,56 @@ void bspI2c1Init(void) {
     I2C1->CR1   = I2C_CR1_PE;
 }
 /*----------------------------------------------------------------------------*/
+
+/** @fn bspI2c1Ping */
+uint8_t bspI2c1Ping(uint8_t addr7) {
+    uint8_t  ret_val   = 0U;
+    uint32_t ulTimeout = I2C1_TIMEOUT;
+    uint16_t usSr1;
+
+    I2C1->CR1 |= I2C_CR1_START;
+    while ((ulTimeout != 0U) && ((I2C1->SR1 & I2C_SR1_SB) == 0U)) {
+        ulTimeout--;
+    }
+
+    I2C1->DR = (uint16_t)(addr7 << 1U);        /* address + write */
+
+    ulTimeout = I2C1_TIMEOUT;
+    while (ulTimeout != 0U) {
+        usSr1 = (uint16_t)I2C1->SR1;
+        if ((usSr1 & I2C_SR1_ADDR) != 0U) {
+            (void)I2C1->SR1;
+            (void)I2C1->SR2;                   /* clear ADDR (ACK received) */
+            ret_val   = 1U;
+            ulTimeout = 0U;
+        }
+        else if ((usSr1 & I2C_SR1_AF) != 0U) {
+            I2C1->SR1 = (uint16_t)~I2C_SR1_AF; /* clear AF (NACK received) */
+            ulTimeout = 0U;
+        }
+        else {
+            ulTimeout--;
+        }
+    }
+
+    I2C1->CR1 |= I2C_CR1_STOP;
+    return ret_val;
+}
+
+/** @fn bspI2c1LineLevels */
+uint8_t bspI2c1LineLevels(void) {
+    uint8_t  ret_val;
+    uint32_t ulSaved;
+
+    ulSaved    = GPIOB->CRL;
+    /* PB6/PB7 → floating input (CNF=01, MODE=00 → 0x4) to read the bus idle. */
+    GPIOB->CRL = (ulSaved & ~((0xFUL << 24U) | (0xFUL << 28U)))
+               | (0x4UL << 24U)    /* PB6 SCL floating input */
+               | (0x4UL << 28U);   /* PB7 SDA floating input */
+    ret_val    = (uint8_t)((GPIOB->IDR >> 6U) & 0x3U);
+    GPIOB->CRL = ulSaved;          /* restore alternate-function open-drain */
+    return ret_val;
+}
 
 /** @fn bspI2c1WriteReg */
 uint8_t bspI2c1WriteReg(uint8_t addr7, uint8_t reg, uint8_t val) {

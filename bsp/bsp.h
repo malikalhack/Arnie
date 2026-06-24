@@ -128,6 +128,25 @@ uint16_t bspLidarRxDmaIndex(uint16_t len);
 void bspI2c1Init(void);
 
 /**
+ * @brief Probes a 7-bit I2C address for an acknowledge (bus scan helper).
+ * @details Issues START, the address byte with the write bit, then evaluates
+ *          ACK vs NACK and releases the bus with STOP. Polled and bounded.
+ * @param[in] addr7 - 7-bit slave address to probe.
+ * @returns Nonzero if the device acknowledged; 0 on NACK or bus timeout.
+ */
+uint8_t bspI2c1Ping(uint8_t addr7);
+
+/**
+ * @brief Samples the idle logic level of the SCL and SDA lines.
+ * @details Temporarily switches PB6/PB7 to floating input, reads the pins,
+ *          then restores the I2C alternate function. On a healthy powered bus
+ *          both lines read high (pulled up). A low line indicates missing
+ *          power, a missing pull-up, or a short to ground.
+ * @returns Bit0 = SCL (PB6) level, bit1 = SDA (PB7) level.
+ */
+uint8_t bspI2c1LineLevels(void);
+
+/**
  * @brief Writes a single register on an I2C device (polled, bounded).
  * @param[in] addr7 - 7-bit slave address.
  * @param[in] reg   - register address.

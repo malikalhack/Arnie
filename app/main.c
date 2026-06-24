@@ -24,7 +24,7 @@
  *          telemetry is emitted, avoiding a permanent cfault and idle I2C
  *          traffic.
  */
-#define COMPASS_ENABLED         0U
+#define COMPASS_ENABLED         1U
 
 /**
  * @def MOTOR_ENABLED
@@ -42,6 +42,15 @@
  *          odometry telemetry is emitted.
  */
 #define ENCODER_ENABLED         0U
+
+/**
+ * @def I2C_SCAN_ENABLED
+ * @brief Set to 1 to dump an I2C bus scan over the debug UART at start-up.
+ * @details Diagnostic aid: lists every 7-bit address that acknowledges, so a
+ *          missing or mis-wired magnetometer can be told apart from a wrong
+ *          driver. Set back to 0 for normal operation.
+ */
+#define I2C_SCAN_ENABLED        0U
 
 /**
  * @def HEARTBEAT_PERIOD_MS
@@ -80,6 +89,11 @@ static void taskLidar(AcroParam_t pParam);
 /** @brief Periodic task: toggles the LED and reports the front distance. */
 static void taskHeartbeat(AcroParam_t pParam);
 
+#if (I2C_SCAN_ENABLED == 1)
+/** @brief One-shot diagnostic: lists every I2C address that acknowledges. */
+static void i2cBusScan(void);
+#endif /* I2C_SCAN_ENABLED */
+
 /****************************** Private functions *****************************/
 
 /** @fn Error_Handler */
@@ -89,6 +103,32 @@ static void Error_Handler(void) {
     }
 }
 /*----------------------------------------------------------------------------*/
+
+#if (I2C_SCAN_ENABLED == 1)
+/** @fn i2cBusScan */
+static void i2cBusScan(void) {
+    uint8_t ucAddr;
+    uint8_t ucLvl;
+
+    bspI2c1Init();
+    ucLvl = bspI2c1LineLevels();
+    uartSendStr("I2C idle SCL=");
+    uartSendUint8((uint8_t)(ucLvl & 1U));
+    uartSendStr(" SDA=");
+    uartSendUint8((uint8_t)((ucLvl >> 1U) & 1U));
+    uartSendStr("\r\n");
+
+    uartSendStr("I2C scan:");
+    for (ucAddr = 0x08U; ucAddr <= 0x77U; ucAddr++) {
+        if (bspI2c1Ping(ucAddr) != 0U) {
+            uartSendStr(" 0x");
+            uartSendHex8(ucAddr);
+        }
+    }
+    uartSendStr("\r\n");
+}
+/*----------------------------------------------------------------------------*/
+#endif /* I2C_SCAN_ENABLED */
 
 /** @fn taskLidar */
 static void taskLidar(AcroParam_t pParam) {
@@ -166,6 +206,9 @@ static void taskHeartbeat(AcroParam_t pParam) {
 /** @fn main */
 int main(void) {
     bspStart();
+#if (I2C_SCAN_ENABLED == 1)
+    i2cBusScan();
+#endif /* I2C_SCAN_ENABLED */
     lidarInit();
 #if (COMPASS_ENABLED == 1)
     compassInit();
