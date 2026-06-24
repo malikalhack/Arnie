@@ -10,6 +10,7 @@
 #include "bsp.h"
 #include "lidar.h"
 #include "compass.h"
+#include "motor.h"
 #include "acrosched.h"
 #include "acrosched_defs.h"
 
@@ -23,6 +24,15 @@
  *          traffic.
  */
 #define COMPASS_ENABLED         0U
+
+/**
+ * @def MOTOR_ENABLED
+ * @brief Set to 1 once the H-bridge motor driver is wired and validated.
+ * @details While 0 the motor peripherals (TIM1/TIM4, SD lines) are not
+ *          initialised, so the motor pins stay in their reset state and the
+ *          bridges remain disabled.
+ */
+#define MOTOR_ENABLED           0U
 
 /**
  * @def HEARTBEAT_PERIOD_MS
@@ -144,6 +154,9 @@ int main(void) {
 #if (COMPASS_ENABLED == 1)
     compassInit();
 #endif /* COMPASS_ENABLED */
+#if (MOTOR_ENABLED == 1)
+    motorInit();
+#endif /* MOTOR_ENABLED */
 
     CHECK_STATUS(acroInit(&sys_tick));
     CHECK_STATUS(acroAddTask(

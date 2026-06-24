@@ -1,6 +1,6 @@
 /**
  * @file    compass.c
- * @version 0.1.0
+ * @version 0.2.0
  * @authors Anton Chernov
  * @date    2026-06-21
  * @date    @showdate "%Y-%m-%d"
@@ -16,9 +16,8 @@
  */
 
 /******************************** Included files ******************************/
-#include "RTE_Components.h"
-#include CMSIS_device_header
 #include "compass.h"
+#include "bsp.h"
 #include <stddef.h>
 /********************************* Definitions ********************************/
 
@@ -95,30 +94,6 @@
 #define HMC_MODE_CONTINUOUS     0x00U
 
 /**
- * @def COMPASS_FREQ_MHZ
- * @brief I2C input clock (PCLK1) in MHz, loaded into I2C_CR2 FREQ.
- */
-#define COMPASS_FREQ_MHZ        36U
-
-/**
- * @def COMPASS_CCR_STD
- * @brief CCR for 100 kHz standard mode: PCLK1 / (2 × Fscl) = 36M / 200k.
- */
-#define COMPASS_CCR_STD         180U
-
-/**
- * @def COMPASS_TRISE_STD
- * @brief TRISE for standard mode: FREQ + 1 (1000 ns / 27.8 ns + 1).
- */
-#define COMPASS_TRISE_STD       37U
-
-/**
- * @def COMPASS_I2C_TIMEOUT
- * @brief Poll iterations before a bus operation is abandoned.
- */
-#define COMPASS_I2C_TIMEOUT     50000U
-
-/**
  * @def COMPASS_DATA_LEN
  * @brief Number of data bytes read per sample (X, Z, Y × 2).
  */
@@ -176,33 +151,6 @@ static uint8_t  compass_fault;
 
 /***************************** Private prototypes *****************************/
 
-/** @brief Configures GPIOB pins and the I2C1 peripheral. */
-static void compassI2CInit(void);
-
-/**
- * @brief Waits for an I2C_SR1 flag with a bounded timeout.
- * @param[in] flag - SR1 bit mask to wait for.
- * @returns Nonzero if the flag was observed; 0 on timeout.
- */
-static uint8_t i2cWaitSR1(uint16_t flag);
-
-/**
- * @brief Writes a single register on the magnetometer.
- * @param[in] reg - register address.
- * @param[in] val - value to store.
- * @returns Nonzero on success; 0 on bus timeout.
- */
-static uint8_t compassWriteReg(uint8_t reg, uint8_t val);
-
-/**
- * @brief Reads a block of registers starting at @p reg.
- * @param[in]  reg   - starting register address.
- * @param[out] pBuf  - destination buffer.
- * @param[in]  len   - number of bytes to read (must be >= 3).
- * @returns Nonzero on success; 0 on bus timeout.
- */
-static uint8_t compassReadRegs(uint8_t reg, uint8_t *pBuf, uint8_t len);
-
 /** @brief Recomputes the cached heading from the X/Y components. */
 static void compassUpdateHeading(void);
 
@@ -217,123 +165,6 @@ static void compassUpdateHeading(void);
 static float compassAtan2(float y, float x);
 
 /****************************** Private functions *****************************/
-
-/** @fn compassI2CInit */
-static void compassI2CInit(void) {
-    /* Enable GPIOB and I2C1 clocks */
-    RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
-    RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
-
-    /*
-     * PB6 (I2C1_SCL) and PB7 (I2C1_SDA): alternate-function open-drain,
-     * 50 MHz → CNF=11, MODE=11 → 0xF. PB6 = CRL[27:24], PB7 = CRL[31:28].
-     */
-    GPIOB->CRL = (GPIOB->CRL & ~((0xFUL << 24U) | (0xFUL << 28U)))
-               | (0xFUL << 24U)    /* PB6 SCL */
-               | (0xFUL << 28U);   /* PB7 SDA */
-
-    /* Software-reset the peripheral, then program standard mode 100 kHz */
-    I2C1->CR1   = I2C_CR1_SWRST;
-    I2C1->CR1   = 0U;
-    I2C1->CR2   = COMPASS_FREQ_MHZ;
-    I2C1->CCR   = COMPASS_CCR_STD;
-    I2C1->TRISE = COMPASS_TRISE_STD;
-    I2C1->CR1   = I2C_CR1_PE;
-}
-/*----------------------------------------------------------------------------*/
-
-/** @fn i2cWaitSR1 */
-static uint8_t i2cWaitSR1(uint16_t flag) {
-    uint8_t  ret_val   = 0U;
-    uint32_t ulTimeout = COMPASS_I2C_TIMEOUT;
-
-    while (ulTimeout != 0U) {
-        if ((I2C1->SR1 & flag) != 0U) {
-            ret_val   = 1U;
-            ulTimeout = 0U;     /* flag observed → leave the loop */
-        }
-        else {
-            ulTimeout--;
-        }
-    }
-    return ret_val;
-}
-/*----------------------------------------------------------------------------*/
-
-/** @fn compassWriteReg */
-static uint8_t compassWriteReg(uint8_t reg, uint8_t val) {
-    uint8_t ucOk = 1U;
-
-    I2C1->CR1 |= I2C_CR1_START;
-    ucOk &= i2cWaitSR1(I2C_SR1_SB);
-
-    I2C1->DR = (uint16_t)(HMC_ADDR << 1U);     /* address + write */
-    ucOk &= i2cWaitSR1(I2C_SR1_ADDR);
-    (void)I2C1->SR1;
-    (void)I2C1->SR2;                           /* clear ADDR */
-
-    ucOk &= i2cWaitSR1(I2C_SR1_TXE);
-    I2C1->DR = (uint16_t)reg;
-
-    ucOk &= i2cWaitSR1(I2C_SR1_TXE);
-    I2C1->DR = (uint16_t)val;
-
-    ucOk &= i2cWaitSR1(I2C_SR1_BTF);
-    I2C1->CR1 |= I2C_CR1_STOP;
-
-    return ucOk;
-}
-/*----------------------------------------------------------------------------*/
-
-/** @fn compassReadRegs */
-static uint8_t compassReadRegs(uint8_t reg, uint8_t *pBuf, uint8_t len) {
-    uint8_t ucOk = 1U;
-    uint8_t i    = 0U;
-
-    /* Phase 1 — point the device at the starting register */
-    I2C1->CR1 |= I2C_CR1_START;
-    ucOk &= i2cWaitSR1(I2C_SR1_SB);
-    I2C1->DR = (uint16_t)(HMC_ADDR << 1U);     /* address + write */
-    ucOk &= i2cWaitSR1(I2C_SR1_ADDR);
-    (void)I2C1->SR1;
-    (void)I2C1->SR2;                           /* clear ADDR */
-    ucOk &= i2cWaitSR1(I2C_SR1_TXE);
-    I2C1->DR = (uint16_t)reg;
-    ucOk &= i2cWaitSR1(I2C_SR1_BTF);
-
-    /* Phase 2 — repeated start, switch to receiver, read len bytes */
-    I2C1->CR1 |= I2C_CR1_ACK;
-    I2C1->CR1 |= I2C_CR1_START;
-    ucOk &= i2cWaitSR1(I2C_SR1_SB);
-    I2C1->DR = (uint16_t)((HMC_ADDR << 1U) | 1U);   /* address + read */
-    ucOk &= i2cWaitSR1(I2C_SR1_ADDR);
-    (void)I2C1->SR1;
-    (void)I2C1->SR2;                           /* clear ADDR */
-
-    /* Read all but the last three bytes with ACK enabled */
-    while ((uint8_t)(len - i) > 3U) {
-        ucOk &= i2cWaitSR1(I2C_SR1_RXNE);
-        pBuf[i] = (uint8_t)I2C1->DR;
-        i++;
-    }
-
-    /* Closing sequence for the final three bytes (RM0008 N > 2 path) */
-    ucOk &= i2cWaitSR1(I2C_SR1_BTF);
-    I2C1->CR1 &= (uint16_t)~I2C_CR1_ACK;
-    pBuf[i] = (uint8_t)I2C1->DR;               /* data N-2 */
-    i++;
-
-    ucOk &= i2cWaitSR1(I2C_SR1_BTF);
-    I2C1->CR1 |= I2C_CR1_STOP;
-    pBuf[i] = (uint8_t)I2C1->DR;               /* data N-1 */
-    i++;
-
-    ucOk &= i2cWaitSR1(I2C_SR1_RXNE);
-    pBuf[i] = (uint8_t)I2C1->DR;               /* data N   */
-
-    return ucOk;
-}
-/*----------------------------------------------------------------------------*/
 
 /** @fn compassAtan2 */
 static float compassAtan2(float y, float x) {
@@ -392,9 +223,9 @@ void compassInit(void) {
     heading_deci  = 0U;
     compass_fault = 1U;            /* assume failure until identified */
 
-    compassI2CInit();
+    bspI2c1Init();
 
-    if (compassReadRegs(HMC_REG_IDENT_A, id, 3U) != 0U) {
+    if (bspI2c1ReadRegs(HMC_ADDR, HMC_REG_IDENT_A, id, 3U) != 0U) {
         if (
             (id[0] == HMC_ID_A) &&
             (id[1] == HMC_ID_B) &&
@@ -405,9 +236,9 @@ void compassInit(void) {
     }
 
     if (compass_fault == 0U) {
-        ucCfgOk  = compassWriteReg(HMC_REG_CONFIG_A, HMC_CONFIG_A_VAL);
-        ucCfgOk &= compassWriteReg(HMC_REG_CONFIG_B, HMC_CONFIG_B_VAL);
-        ucCfgOk &= compassWriteReg(HMC_REG_MODE, HMC_MODE_CONTINUOUS);
+        ucCfgOk  = bspI2c1WriteReg(HMC_ADDR, HMC_REG_CONFIG_A, HMC_CONFIG_A_VAL);
+        ucCfgOk &= bspI2c1WriteReg(HMC_ADDR, HMC_REG_CONFIG_B, HMC_CONFIG_B_VAL);
+        ucCfgOk &= bspI2c1WriteReg(HMC_ADDR, HMC_REG_MODE, HMC_MODE_CONTINUOUS);
         if (ucCfgOk == 0U) {
             compass_fault = 1U;
         }
@@ -421,7 +252,7 @@ uint8_t compassProcess(void) {
     uint8_t ret_val = 0U;
 
     if (compass_fault == 0U) {
-        if (compassReadRegs(HMC_REG_DATA, raw, COMPASS_DATA_LEN) != 0U) {
+        if (bspI2c1ReadRegs(HMC_ADDR, HMC_REG_DATA, raw, COMPASS_DATA_LEN) != 0U) {
             mag_x = (int16_t)(((uint16_t)raw[0] << 8U) | raw[1]);
             mag_z = (int16_t)(((uint16_t)raw[2] << 8U) | raw[3]);
             mag_y = (int16_t)(((uint16_t)raw[4] << 8U) | raw[5]);

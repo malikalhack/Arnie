@@ -60,6 +60,9 @@ project:
     - group: Compass
       files:
         - file: ./compass.c
+    - group: Motor
+      files:
+        - file: ./motor.c
     - group: Scheduler
       files:
         - file: ../lib/stm32f1-ac6/acrosched.lib

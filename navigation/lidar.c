@@ -1,6 +1,6 @@
 /**
  * @file    lidar.c
- * @version 0.1.0
+ * @version 0.2.0
  * @authors Anton Chernov
  * @date    2026-06-19
  * @date    @showdate "%Y-%m-%d"
@@ -25,9 +25,8 @@
  */
 
 /******************************** Included files ******************************/
-#include "RTE_Components.h"
-#include CMSIS_device_header
 #include "lidar.h"
+#include "bsp.h"
 #include <string.h>
 /********************************* Definitions ********************************/
 
@@ -144,9 +143,6 @@ static uint8_t        health_fault;
 
 /***************************** Private prototypes *****************************/
 
-/** @brief Configures DMA1 Channel 5 for USART1 RX in circular mode. */
-static void lidarDmaInit(void);
-
 /** @brief Resets the frame parser to wait for a new header. */
 static void lidarResetParser(void);
 
@@ -178,28 +174,6 @@ static void lidarParseMeasurement(void);
 static void lidarPublishScan(void);
 
 /****************************** Private functions *****************************/
-
-/** @fn lidarDmaInit */
-static void lidarDmaInit(void) {
-    /* Enable DMA1 controller clock */
-    RCC->AHBENR |= RCC_AHBENR_DMA1EN;
-
-    /* USART1_RX is mapped to DMA1 Channel 5 on STM32F103 */
-    DMA1_Channel5->CCR   = 0U;                  /* disable while configuring */
-    DMA1_Channel5->CPAR  = (uint32_t)(&USART1->DR);
-    DMA1_Channel5->CMAR  = (uint32_t)dma_buffer;
-    DMA1_Channel5->CNDTR = LIDAR_DMA_BUF_SIZE;
-    DMA1_Channel5->CCR   = DMA_CCR1_MINC        /* memory increment */
-                         | DMA_CCR1_CIRC        /* circular buffer  */
-                         | DMA_CCR1_PL_0        /* medium priority  */
-                         | DMA_CCR1_EN;         /* enable channel   */
-
-    /* Route the USART1 receiver to DMA */
-    USART1->CR3 |= USART_CR3_DMAR;
-
-    dma_tail = 0U;
-}
-/*----------------------------------------------------------------------------*/
 
 /** @fn lidarResetParser */
 static void lidarResetParser(void) {
@@ -435,7 +409,8 @@ void lidarInit(void) {
     scan_initialized = 0U;
     radar_speed      = 0U;
     health_fault     = 0U;
-    lidarDmaInit();
+    dma_tail         = 0U;
+    bspLidarRxDmaInit(dma_buffer, LIDAR_DMA_BUF_SIZE);
 }
 /*----------------------------------------------------------------------------*/
 
@@ -443,7 +418,7 @@ void lidarInit(void) {
 void lidarProcess(void) {
     uint16_t head;
 
-    head = (uint16_t)(LIDAR_DMA_BUF_SIZE - DMA1_Channel5->CNDTR);
+    head = bspLidarRxDmaIndex(LIDAR_DMA_BUF_SIZE);
     while (dma_tail != head) {
         lidarFeedByte(dma_buffer[dma_tail]);
         dma_tail = (uint16_t)((dma_tail + 1U) % LIDAR_DMA_BUF_SIZE);

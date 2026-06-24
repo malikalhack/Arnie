@@ -1,6 +1,6 @@
 /**
  * @file    bsp.h
- * @version 0.3.0
+ * @version 0.4.0
  * @authors Anton Chernov
  * @date    2026-06-19
  * @date    @showdate "%Y-%m-%d"
@@ -89,6 +89,94 @@ void turn_on_led_green(void);
 
 /** @brief Turn off the on-board LED. */
 void turn_off_led_green(void);
+
+/*------------------------------ Lidar RX DMA -------------------------------*/
+
+/**
+ * @brief Configures DMA1 Channel 5 for USART1 RX in circular mode.
+ * @details Routes the USART1 receiver into the caller-owned circular buffer.
+ *          The link is simplex (radar → MCU); no transmit path is set up.
+ * @param[in] pBuf - destination circular buffer (must not be NULL).
+ * @param[in] len  - buffer length in bytes.
+ */
+void bspLidarRxDmaInit(uint8_t *pBuf, uint16_t len);
+
+/**
+ * @brief Returns the DMA write index within the RX buffer.
+ * @details The number of bytes the controller has written, modulo @p len,
+ *          i.e. (len - DMA remaining count). Used to drain the circular
+ *          buffer without interrupts.
+ * @param[in] len - buffer length passed to bspLidarRxDmaInit().
+ * @returns Current write index in the range [0 .. len-1].
+ */
+uint16_t bspLidarRxDmaIndex(uint16_t len);
+
+/*------------------------------ I2C1 (polled) ------------------------------*/
+
+/**
+ * @brief Brings up I2C1 (PB6 SCL, PB7 SDA) in standard mode 100 kHz.
+ * @details Uses the bus device's own pull-ups. All transfers are polled with
+ *          a bounded timeout, so a stuck bus can never hang the scheduler.
+ */
+void bspI2c1Init(void);
+
+/**
+ * @brief Writes a single register on an I2C device (polled, bounded).
+ * @param[in] addr7 - 7-bit slave address.
+ * @param[in] reg   - register address.
+ * @param[in] val   - value to store.
+ * @returns Nonzero on success; 0 on bus timeout.
+ */
+uint8_t bspI2c1WriteReg(uint8_t addr7, uint8_t reg, uint8_t val);
+
+/**
+ * @brief Reads a block of registers from an I2C device (polled, bounded).
+ * @details Implements the RM0008 N > 2 closing sequence; @p len must be >= 3.
+ * @param[in]  addr7 - 7-bit slave address.
+ * @param[in]  reg   - starting register address.
+ * @param[out] pBuf  - destination buffer.
+ * @param[in]  len   - number of bytes to read (>= 3).
+ * @returns Nonzero on success; 0 on bus timeout.
+ */
+uint8_t bspI2c1ReadRegs(uint8_t addr7, uint8_t reg, uint8_t *pBuf, uint8_t len);
+
+/*------------------------------- Motor drive -------------------------------*/
+
+/**
+ * @def BSP_MOTOR_DUTY_FULL
+ * @brief PWM compare value corresponding to 100 % duty (timer auto-reload).
+ * @details A driver maps its normalised command onto [0 .. BSP_MOTOR_DUTY_FULL]
+ *          before calling bspMotorSetDutyA()/bspMotorSetDutyB().
+ */
+#define BSP_MOTOR_DUTY_FULL     3599U
+
+/**
+ * @brief Brings up TIM1/TIM4, the motor GPIO and the IR2184 shutdown lines.
+ * @details Motor A on TIM1_CH1 (PA8) / TIM1_CH4 (PA11); Motor B on TIM4_CH3
+ *          (PB8) / TIM4_CH4 (PB9); 20 kHz PWM. SD/EN lines PB12/PB14 are driven
+ *          to the safe OFF (disabled) state and both duties are left at zero.
+ */
+void bspMotorInit(void);
+
+/**
+ * @brief Sets the two PWM leg duties of motor A.
+ * @param[in] fwd - forward-leg compare value (0 .. BSP_MOTOR_DUTY_FULL).
+ * @param[in] rev - reverse-leg compare value (0 .. BSP_MOTOR_DUTY_FULL).
+ */
+void bspMotorSetDutyA(uint16_t fwd, uint16_t rev);
+
+/**
+ * @brief Sets the two PWM leg duties of motor B.
+ * @param[in] fwd - forward-leg compare value (0 .. BSP_MOTOR_DUTY_FULL).
+ * @param[in] rev - reverse-leg compare value (0 .. BSP_MOTOR_DUTY_FULL).
+ */
+void bspMotorSetDutyB(uint16_t fwd, uint16_t rev);
+
+/**
+ * @brief Arms or disables both H-bridges via the IR2184 SD lines.
+ * @param[in] enable - nonzero to arm (SD high), 0 to disable (SD low).
+ */
+void bspMotorEnable(uint8_t enable);
 
 /*****************************************************************************/
 #endif //! BSP_H_

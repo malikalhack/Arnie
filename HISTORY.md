@@ -164,3 +164,40 @@ Records key decisions, structural changes, and completed phases.
 - Both toolchains pass throughout: **AC6 2 succeeded, GCC 2 succeeded.**
 
 ---
+
+## 2026-06-22
+
+### BSP refactor — all platform-dependent code centralised in the BSP
+- Established the rule that **`bsp/bsp.c` / `bsp.h` is the only board-specific
+  translation unit**. Every driver (`lidar`, `compass`, `motor`, `encoder`)
+  now includes **`"bsp.h"`** instead of `CMSIS_device_header` and never
+  touches an MCU register, peripheral struct or raw address directly.
+- Peripheral access that previously lived in the drivers was **moved behind
+  named BSP entry points**:
+  - Lidar — `bspLidarRxDmaInit()` / `bspLidarRxDmaIndex()` own the USART1 +
+    DMA1 Ch5 setup and the circular write index; `lidar.c` keeps only the
+    protocol/state-machine logic.
+  - Compass — the I2C1 transfers were lifted into `bspI2c1Init()`,
+    `bspI2c1WriteReg()` and `bspI2c1ReadRegs()` (polled, bounded by a
+    timeout); `compass.c` keeps only register maps and the heading maths.
+- Rationale: keeps the drivers **portable and register-free**, isolates the
+  StdPeriph `stm32f10x.h` coupling to one file, and gives each port a single
+  place to implement. `bsp.h` bumped to **v0.6.0**, `bsp.c` to **v0.5.0**.
+
+### Motor driver (H-bridge, IR2184)
+- `navigation/motor.c` / `motor.h` (v0.1.0 / v0.2.0): **sign-magnitude PWM**
+  drive for two DC motors. `motorSetA()` / `motorSetB()` take a signed command
+  in `[-MOTOR_SPEED_MAX .. +MOTOR_SPEED_MAX]` (per-mille); the sign picks the
+  driven leg, the magnitude the duty. `motorEnable()` / `motorStop()` arm and
+  coast both bridges through the IR2184 **SD** lines (default OFF on reset).
+- BSP side (`bspMotorInit`, `bspMotorSetDutyA/B`, `bspMotorEnable`,
+  `BSP_MOTOR_DUTY_FULL = 3599`): **20 kHz** PWM (above audible) from 72 MHz
+  timers. Motor A on **TIM1_CH1 (PA8) / CH4 (PA11)**, Motor B on
+  **TIM4_CH3 (PB8) / CH4 (PB9)**; SD/EN on **PB12 / PB14**.
+  - Pin conflicts resolved: USART1 (lidar) occupies PA9/PA10, blocking
+    TIM1_CH2/CH3, so motor A uses TIM1_CH1+CH4; I2C1 keeps PB6/PB7, so motor B
+    uses TIM4_CH3/CH4 (not CH1/CH2).
+  - **TIM1 is an advanced timer** — its outputs stay high-Z until
+    `BDTR.MOE = 1`, so `bspMotorInit()` sets the main-output-enable bit.
+
+---

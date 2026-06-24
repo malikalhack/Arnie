@@ -1,6 +1,6 @@
 /**
  * @file    bsp.c
- * @version 0.2.0
+ * @version 0.3.0
  * @authors Anton Chernov
  * @date    2026-06-19
  * @date    @showdate "%Y-%m-%d"
@@ -47,6 +47,40 @@
 #define DEBUG_BAUD_RATE         115200U
 #define DEBUG_BRR_VALUE         313U
 
+/*
+ * I2C1 standard-mode 100 kHz timing (PCLK1 = 36 MHz).
+ *   FREQ  = 36       (input clock in MHz)
+ *   CCR   = 36M / (2 × 100k) = 180
+ *   TRISE = FREQ + 1 = 37
+ */
+#define I2C1_FREQ_MHZ           36U
+#define I2C1_CCR_STD            180U
+#define I2C1_TRISE_STD          37U
+
+/**
+ * @def I2C1_TIMEOUT
+ * @brief Poll iterations before an I2C bus operation is abandoned.
+ */
+#define I2C1_TIMEOUT            50000U
+
+/**
+ * @def MOTOR_PWM_RELOAD
+ * @brief TIM auto-reload for the 20 kHz PWM carrier (72 MHz / 3600 = 20 kHz).
+ */
+#define MOTOR_PWM_RELOAD        3599U
+
+/**
+ * @def MOTOR_A_SD_PIN
+ * @brief GPIOB pin of the Motor A IR2184 shutdown/enable line.
+ */
+#define MOTOR_A_SD_PIN          12U
+
+/**
+ * @def MOTOR_B_SD_PIN
+ * @brief GPIOB pin of the Motor B IR2184 shutdown/enable line.
+ */
+#define MOTOR_B_SD_PIN          14U
+
 
 /****************************** Module variables ******************************/
 
@@ -90,6 +124,13 @@ static void dwt_init(void);
  */
 static void uart_config(void);
 #endif /* UART_ENABLED */
+
+/**
+ * @brief Waits for an I2C1_SR1 flag with a bounded timeout.
+ * @param[in] flag - SR1 bit mask to wait for.
+ * @returns Nonzero if the flag was observed; 0 on timeout.
+ */
+static uint8_t i2cWaitSR1(uint16_t flag);
 
 /********************* Application Programming Interface **********************/
 
@@ -299,6 +340,25 @@ static void uart_config(void) {
 }
 #endif /* UART_ENABLED */
 
+/*----------------------------------------------------------------------------*/
+
+/** @fn i2cWaitSR1 */
+static uint8_t i2cWaitSR1(uint16_t flag) {
+    uint8_t  ret_val   = 0U;
+    uint32_t ulTimeout = I2C1_TIMEOUT;
+
+    while (ulTimeout != 0U) {
+        if ((I2C1->SR1 & flag) != 0U) {
+            ret_val   = 1U;
+            ulTimeout = 0U;     /* flag observed → leave the loop */
+        }
+        else {
+            ulTimeout--;
+        }
+    }
+    return ret_val;
+}
+
 /********************* Application Programming Interface *********************/
 
 /** @fn turn_on_led_green */
@@ -368,5 +428,215 @@ void uartSendHex8(uint8_t n) {
 
     uartSendChar(hex[(n >> 4U) & 0x0FU]);
     uartSendChar(hex[n & 0x0FU]);
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspLidarRxDmaInit */
+void bspLidarRxDmaInit(uint8_t *pBuf, uint16_t len) {
+    /* Enable DMA1 controller clock */
+    RCC->AHBENR |= RCC_AHBENR_DMA1EN;
+
+    /* USART1_RX is mapped to DMA1 Channel 5 on STM32F103 */
+    DMA1_Channel5->CCR   = 0U;                  /* disable while configuring */
+    DMA1_Channel5->CPAR  = (uint32_t)(&USART1->DR);
+    DMA1_Channel5->CMAR  = (uint32_t)pBuf;
+    DMA1_Channel5->CNDTR = len;
+    DMA1_Channel5->CCR   = DMA_CCR1_MINC        /* memory increment */
+                         | DMA_CCR1_CIRC        /* circular buffer  */
+                         | DMA_CCR1_PL_0        /* medium priority  */
+                         | DMA_CCR1_EN;         /* enable channel   */
+
+    /* Route the USART1 receiver to DMA */
+    USART1->CR3 |= USART_CR3_DMAR;
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspLidarRxDmaIndex */
+uint16_t bspLidarRxDmaIndex(uint16_t len) {
+    return (uint16_t)(len - (uint16_t)DMA1_Channel5->CNDTR);
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspI2c1Init */
+void bspI2c1Init(void) {
+    /* Enable GPIOB and I2C1 clocks */
+    RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
+    RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
+
+    /*
+     * PB6 (I2C1_SCL) and PB7 (I2C1_SDA): alternate-function open-drain,
+     * 50 MHz → CNF=11, MODE=11 → 0xF. PB6 = CRL[27:24], PB7 = CRL[31:28].
+     */
+    GPIOB->CRL = (GPIOB->CRL & ~((0xFUL << 24U) | (0xFUL << 28U)))
+               | (0xFUL << 24U)    /* PB6 SCL */
+               | (0xFUL << 28U);   /* PB7 SDA */
+
+    /* Software-reset the peripheral, then program standard mode 100 kHz */
+    I2C1->CR1   = I2C_CR1_SWRST;
+    I2C1->CR1   = 0U;
+    I2C1->CR2   = I2C1_FREQ_MHZ;
+    I2C1->CCR   = I2C1_CCR_STD;
+    I2C1->TRISE = I2C1_TRISE_STD;
+    I2C1->CR1   = I2C_CR1_PE;
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspI2c1WriteReg */
+uint8_t bspI2c1WriteReg(uint8_t addr7, uint8_t reg, uint8_t val) {
+    uint8_t ucOk = 1U;
+
+    I2C1->CR1 |= I2C_CR1_START;
+    ucOk &= i2cWaitSR1(I2C_SR1_SB);
+
+    I2C1->DR = (uint16_t)(addr7 << 1U);        /* address + write */
+    ucOk &= i2cWaitSR1(I2C_SR1_ADDR);
+    (void)I2C1->SR1;
+    (void)I2C1->SR2;                           /* clear ADDR */
+
+    ucOk &= i2cWaitSR1(I2C_SR1_TXE);
+    I2C1->DR = (uint16_t)reg;
+
+    ucOk &= i2cWaitSR1(I2C_SR1_TXE);
+    I2C1->DR = (uint16_t)val;
+
+    ucOk &= i2cWaitSR1(I2C_SR1_BTF);
+    I2C1->CR1 |= I2C_CR1_STOP;
+
+    return ucOk;
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspI2c1ReadRegs */
+uint8_t bspI2c1ReadRegs(uint8_t addr7, uint8_t reg, uint8_t *pBuf, uint8_t len) {
+    uint8_t ucOk = 1U;
+    uint8_t i    = 0U;
+
+    /* Phase 1 — point the device at the starting register */
+    I2C1->CR1 |= I2C_CR1_START;
+    ucOk &= i2cWaitSR1(I2C_SR1_SB);
+    I2C1->DR = (uint16_t)(addr7 << 1U);        /* address + write */
+    ucOk &= i2cWaitSR1(I2C_SR1_ADDR);
+    (void)I2C1->SR1;
+    (void)I2C1->SR2;                           /* clear ADDR */
+    ucOk &= i2cWaitSR1(I2C_SR1_TXE);
+    I2C1->DR = (uint16_t)reg;
+    ucOk &= i2cWaitSR1(I2C_SR1_BTF);
+
+    /* Phase 2 — repeated start, switch to receiver, read len bytes */
+    I2C1->CR1 |= I2C_CR1_ACK;
+    I2C1->CR1 |= I2C_CR1_START;
+    ucOk &= i2cWaitSR1(I2C_SR1_SB);
+    I2C1->DR = (uint16_t)((addr7 << 1U) | 1U); /* address + read */
+    ucOk &= i2cWaitSR1(I2C_SR1_ADDR);
+    (void)I2C1->SR1;
+    (void)I2C1->SR2;                           /* clear ADDR */
+
+    /* Read all but the last three bytes with ACK enabled */
+    while ((uint8_t)(len - i) > 3U) {
+        ucOk &= i2cWaitSR1(I2C_SR1_RXNE);
+        pBuf[i] = (uint8_t)I2C1->DR;
+        i++;
+    }
+
+    /* Closing sequence for the final three bytes (RM0008 N > 2 path) */
+    ucOk &= i2cWaitSR1(I2C_SR1_BTF);
+    I2C1->CR1 &= (uint16_t)~I2C_CR1_ACK;
+    pBuf[i] = (uint8_t)I2C1->DR;               /* data N-2 */
+    i++;
+
+    ucOk &= i2cWaitSR1(I2C_SR1_BTF);
+    I2C1->CR1 |= I2C_CR1_STOP;
+    pBuf[i] = (uint8_t)I2C1->DR;               /* data N-1 */
+    i++;
+
+    ucOk &= i2cWaitSR1(I2C_SR1_RXNE);
+    pBuf[i] = (uint8_t)I2C1->DR;               /* data N   */
+
+    return ucOk;
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspMotorInit */
+void bspMotorInit(void) {
+    /* Clock the motor peripherals (GPIOA already enabled by rcc_config). */
+    RCC->APB2ENR |= RCC_APB2ENR_IOPAEN     /* GPIOA — Motor A PWM pins  */
+                  | RCC_APB2ENR_IOPBEN     /* GPIOB — Motor B + SD pins */
+                  | RCC_APB2ENR_TIM1EN;    /* TIM1  — Motor A PWM        */
+    RCC->APB1ENR |= RCC_APB1ENR_TIM4EN;    /* TIM4  — Motor B PWM        */
+
+    /*
+     * Motor A PWM: PA8 (TIM1_CH1) and PA11 (TIM1_CH4), AF push-pull 50 MHz
+     * (0xB). PA8 = CRH[3:0], PA11 = CRH[15:12].
+     */
+    GPIOA->CRH = (GPIOA->CRH & ~((0xFUL << 0U) | (0xFUL << 12U)))
+               | (0xBUL << 0U)     /* PA8  AF-PP */
+               | (0xBUL << 12U);   /* PA11 AF-PP */
+
+    /*
+     * Motor B PWM: PB8 (TIM4_CH3) and PB9 (TIM4_CH4), AF push-pull 50 MHz
+     * (0xB). SD/EN lines PB12 / PB14, general-purpose push-pull 2 MHz (0x2).
+     * CRH offsets: PB8 [3:0], PB9 [7:4], PB12 [19:16], PB14 [27:24].
+     */
+    GPIOB->CRH = (GPIOB->CRH & ~((0xFUL << 0U)  | (0xFUL << 4U)
+                               | (0xFUL << 16U) | (0xFUL << 24U)))
+               | (0xBUL << 0U)     /* PB8  AF-PP  */
+               | (0xBUL << 4U)     /* PB9  AF-PP  */
+               | (0x2UL << 16U)    /* PB12 out PP */
+               | (0x2UL << 24U);   /* PB14 out PP */
+
+    /* SD/EN default OFF (disabled): drive both lines low before arming. */
+    GPIOB->BRR = (1UL << MOTOR_A_SD_PIN) | (1UL << MOTOR_B_SD_PIN);
+
+    /* TIM1 (Motor A): CH1 forward leg, CH4 reverse leg, 20 kHz PWM mode 1. */
+    TIM1->PSC   = 0U;
+    TIM1->ARR   = MOTOR_PWM_RELOAD;
+    TIM1->CCR1  = 0U;
+    TIM1->CCR4  = 0U;
+    TIM1->CCMR1 = TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1PE;
+    TIM1->CCMR2 = TIM_CCMR2_OC4M_2 | TIM_CCMR2_OC4M_1 | TIM_CCMR2_OC4PE;
+    TIM1->CCER  = TIM_CCER_CC1E | TIM_CCER_CC4E;
+    TIM1->BDTR  = TIM_BDTR_MOE;            /* advanced timer: main output en */
+    TIM1->CR1   = TIM_CR1_ARPE;
+    TIM1->EGR   = TIM_EGR_UG;              /* load preload registers */
+    TIM1->CR1  |= TIM_CR1_CEN;
+
+    /* TIM4 (Motor B): CH3 forward leg, CH4 reverse leg, 20 kHz PWM mode 1. */
+    TIM4->PSC   = 0U;
+    TIM4->ARR   = MOTOR_PWM_RELOAD;
+    TIM4->CCR3  = 0U;
+    TIM4->CCR4  = 0U;
+    TIM4->CCMR2 = TIM_CCMR2_OC3M_2 | TIM_CCMR2_OC3M_1 | TIM_CCMR2_OC3PE
+                | TIM_CCMR2_OC4M_2 | TIM_CCMR2_OC4M_1 | TIM_CCMR2_OC4PE;
+    TIM4->CCER  = TIM_CCER_CC3E | TIM_CCER_CC4E;
+    TIM4->CR1   = TIM_CR1_ARPE;
+    TIM4->EGR   = TIM_EGR_UG;
+    TIM4->CR1  |= TIM_CR1_CEN;
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspMotorSetDutyA */
+void bspMotorSetDutyA(uint16_t fwd, uint16_t rev) {
+    TIM1->CCR1 = fwd;       /* forward leg (PA8)  */
+    TIM1->CCR4 = rev;       /* reverse leg (PA11) */
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspMotorSetDutyB */
+void bspMotorSetDutyB(uint16_t fwd, uint16_t rev) {
+    TIM4->CCR3 = fwd;       /* forward leg (PB8) */
+    TIM4->CCR4 = rev;       /* reverse leg (PB9) */
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspMotorEnable */
+void bspMotorEnable(uint8_t enable) {
+    if (enable != 0U) {
+        /* SD high arms both IR2184 bridges. */
+        GPIOB->BSRR = (1UL << MOTOR_A_SD_PIN) | (1UL << MOTOR_B_SD_PIN);
+    }
+    else {
+        /* SD low forces both bridges into shutdown (coast). */
+        GPIOB->BRR = (1UL << MOTOR_A_SD_PIN) | (1UL << MOTOR_B_SD_PIN);
+    }
 }
 /******************************************************************************/
