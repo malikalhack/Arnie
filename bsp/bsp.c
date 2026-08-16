@@ -345,6 +345,23 @@ static void dwt_init(void) {
     DWT->CTRL        |= DWT_CTRL_CYCCNTENA_Msk;
     DWT->CYCCNT       = 0U;
 }
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspWatchdogStart */
+void bspWatchdogStart(void) {
+    IWDG->KR  = 0x0000CCCCU;    /* Enable IWDG (also forces the LSI on)     */
+    IWDG->KR  = 0x00005555U;    /* Enable write access to PR and RLR        */
+    IWDG->PR  = 3U;             /* Prescaler /32: LSI ~32 kHz -> ~1 kHz     */
+    IWDG->RLR = 2000U;          /* Reload 2000 -> ~2 s nominal timeout      */
+    while (IWDG->SR != 0U) { }  /* Wait until PR/RLR have been accepted     */
+    IWDG->KR  = 0x0000AAAAU;    /* Reload the counter                       */
+}
+/*----------------------------------------------------------------------------*/
+
+/** @fn bspWatchdogKick */
+void bspWatchdogKick(void) {
+    IWDG->KR = 0x0000AAAAU;     /* Reload to postpone the watchdog reset    */
+}
 
 #ifdef UART_ENABLED
 /*----------------------------------------------------------------------------*/

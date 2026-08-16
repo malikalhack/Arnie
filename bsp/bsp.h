@@ -39,6 +39,17 @@ extern volatile AcroTick_t sys_tick;
 void bspStart(void);
 
 /**
+ * @brief Arms the independent watchdog (IWDG) with a fixed timeout.
+ * @details Once started the watchdog cannot be stopped except by a reset; the
+ *          application must call bspWatchdogKick() more often than the timeout
+ *          or the MCU is reset. Drives a nominal ~2 s timeout from the LSI.
+ */
+void bspWatchdogStart(void);
+
+/** @brief Reloads (kicks) the independent watchdog to postpone its reset. */
+void bspWatchdogKick(void);
+
+/**
  * @brief Returns a coherent snapshot of the system tick counter.
  * @returns Current value of the system tick counter.
  */

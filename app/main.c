@@ -199,9 +199,16 @@ static void taskHeartbeat(AcroParam_t pParam) {
 #endif /* ENCODER_ENABLED */
     uartSendStr("\r\n");
 }
-/*----------------------------------------------------------------------------*/
 
 /********************* Application Programming Interface *********************/
+
+/** @fn acroWatchdogRefresh */
+void acroWatchdogRefresh(void) {
+    /* Strong override: kick the hardware watchdog once per dispatcher
+     * iteration. The kernel calls this only when the loop completes. */
+    bspWatchdogKick();
+}
+/*----------------------------------------------------------------------------*/
 
 /** @fn main */
 int main(void) {
@@ -220,6 +227,7 @@ int main(void) {
     encoderInit();
 #endif /* ENCODER_ENABLED */
 
+    bspWatchdogStart();
     CHECK_STATUS(acroInit(&sys_tick));
     CHECK_STATUS(acroAddTask(
         eDscrLidar, taskLidar, NULL, (uint8_t)eRealtime, 0U, 1U
