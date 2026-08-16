@@ -1,6 +1,6 @@
 /**
  * @file    acrosched_defs.h
- * @version 1.0.0
+ * @version 2.2.0
  * @authors Anton Chernov
  * @date    2026-05-14
  * @date    @showdate "%Y-%m-%d"

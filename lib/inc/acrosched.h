@@ -1,6 +1,6 @@
 /**
  * @file    acrosched.h
- * @version 1.0.0
+ * @version 2.2.0
  * @authors Anton Chernov
  * @date    2026-05-14
  * @date    @showdate "%Y-%m-%d"
@@ -33,7 +33,10 @@ typedef enum EAcroStatus {
     eAcroError        = 1, /**< Unspecified internal error.                 */
     eAcroInvalidParam = 2, /**< One or more parameters are invalid (NULL,   */
                            /**< out-of-range, etc.).                        */
-    eAcroFull         = 3  /**< Task pool is full; no free slot available.  */
+    eAcroFull         = 3, /**< A resource pool is full; no free slot is    */
+                           /**< available (task pool, timer pool, mailbox). */
+    eAcroTimeout      = 4  /**< A blocking wait expired before the resource */
+                           /**< became available (preemptive kernel only).  */
 } EAcroStatus_t;
 
 /*----------------------------------------------------------------------------*/
@@ -67,6 +70,15 @@ typedef void AcroTask_t(AcroParam_t);
  * header for 32-bit platforms (Cortex-M, MSPM0).
  */
 typedef ACROSCHED_TICK_TYPE AcroTick_t;
+
+#if (ACROSCHED_USE_STATISTICS == 1)
+/**
+ * @brief Dispatch counter type for the optional statistics module.
+ * @details Counts per-task function invocations and total dispatcher
+ * iterations. Defined only when ACROSCHED_USE_STATISTICS = 1.
+ */
+typedef uint32_t AcroDispatchCount_t;
+#endif /* ACROSCHED_USE_STATISTICS */
 
 /********************* Application Programming Interface *********************/
 
@@ -220,6 +232,139 @@ uint8_t acroGetTaskId(uint8_t dscr);
 void acroWatchdogRefresh(void);
 
 #endif /* ACROSCHED_USE_WATCHDOG */
+
+/*----------------------------------------------------------------------------*/
+
+#if (ACROSCHED_USE_IDLE_HOOK == 1)
+
+/**
+ * @brief Idle hook called from the dispatcher loop when no task ran.
+ * @details Weak no-op default. The cooperative dispatcher calls this hook once
+ * per iteration whenever no task function was invoked during that iteration,
+ * immediately before ACROSCHED_WAIT_FOR_EVENT(). Override it in the port or
+ * application layer to prepare for or enter a low-power state.
+ * Enable via ACROSCHED_USE_IDLE_HOOK = 1 in acrosched_config.h.
+ */
+void acroIdleHook(void);
+
+/**
+ * @brief Returns the number of ticks until the soonest scheduled task wake-up.
+ * @details Read-only helper for tickless / deep-sleep ports: it scans the task
+ * pool and reports how many ticks remain until the earliest timed task is due
+ * (onetime, periodic or standby). Tasks dispatched on every iteration
+ * (realtime, limited-lifetime) make the result 0 (an event is due now); idle
+ * tasks contribute no event. When no task schedules a wake-up the function
+ * returns the maximum AcroTick_t value, meaning the caller may sleep until an
+ * external interrupt. The scan runs inside a critical section so the snapshot
+ * is consistent. Combine with acroTimersTimeToNext() (software-timer module)
+ * to obtain an overall sleep budget. Enable via ACROSCHED_USE_IDLE_HOOK = 1.
+ * @returns Ticks until the next scheduled task event; 0 if one is already due,
+ * or the maximum AcroTick_t value if no task schedules a wake-up.
+ */
+AcroTick_t acroTimeToNextEvent(void);
+
+#endif /* ACROSCHED_USE_IDLE_HOOK */
+
+/*----------------------------------------------------------------------------*/
+
+#if (ACROSCHED_USE_HOOKS == 1)
+
+/**
+ * @brief Diagnostic hook called when a pool operation is rejected with an error.
+ * @details Weak no-op default. The pool layer calls this hook whenever a public
+ * API operation fails for a reason other than pool overflow (for example an
+ * invalid parameter). The hook runs after the critical section has been left,
+ * so interrupts are in their normal state when it executes. Override this
+ * function in the application layer to log or react to the failure. Pool
+ * overflow is reported separately through acroPoolOverflowHook().
+ * Enable via ACROSCHED_USE_HOOKS = 1 in acrosched_config.h.
+ * @param[in] status - the non-success status returned by the operation.
+ */
+void acroErrorHook(EAcroStatus_t status);
+
+/**
+ * @brief Diagnostic hook called when a task cannot be added because the pool
+ *        is full.
+ * @details Weak no-op default. The pool layer calls this hook whenever
+ * acroAddTask() or acroAddTaskWithDelay() is rejected with eAcroFull. The hook
+ * runs after the critical section has been left. Override this function in the
+ * application layer to log the overflow or take corrective action.
+ * Enable via ACROSCHED_USE_HOOKS = 1 in acrosched_config.h.
+ */
+void acroPoolOverflowHook(void);
+
+#endif /* ACROSCHED_USE_HOOKS */
+
+/*----------------------------------------------------------------------------*/
+
+#if (ACROSCHED_USE_INTROSPECTION == 1)
+
+/**
+ * @struct SAcroTaskInfo
+ * @brief Read-only snapshot of a task's state returned by acroGetTaskInfo().
+ */
+typedef struct SAcroTaskInfo {
+    uint8_t    dscr;        /**< User-defined task descriptor.              */
+    uint8_t    mode;        /**< Current execution mode (@ref EAcroMode_t). */
+    uint8_t    priority;    /**< Dispatch priority (higher = earlier).      */
+    AcroTick_t ticksToNext; /**< Ticks until the next run (0 if due now).   */
+#if (ACROSCHED_USE_STATISTICS == 1)
+    AcroDispatchCount_t dispatchCount; /**< Times the task function ran.    */
+#endif /* ACROSCHED_USE_STATISTICS */
+} SAcroTaskInfo_t;
+
+/**
+ * @brief Returns the number of tasks currently present in the pool.
+ * @details Read-only introspection helper. Enable via
+ * ACROSCHED_USE_INTROSPECTION = 1 in acrosched_config.h.
+ * @returns Current task count (0 to ACROSCHED_MAX_TASKS).
+ */
+uint8_t acroGetTaskCount(void);
+
+/**
+ * @brief Fills a caller-provided structure with a read-only snapshot of a task.
+ * @details Strictly read-only: pool state is never modified. The snapshot is
+ * taken inside a critical section so the four fields are mutually consistent.
+ * Enable via ACROSCHED_USE_INTROSPECTION = 1 in acrosched_config.h.
+ * @param[in]  id    - task ID obtained from acroGetTaskId().
+ * @param[out] pInfo - pointer to the structure to fill (must not be NULL).
+ * @returns Operation status.
+ * @retval eAcroOk           Snapshot written successfully.
+ * @retval eAcroInvalidParam pInfo is NULL, or no task with the given id exists.
+ */
+EAcroStatus_t acroGetTaskInfo(uint8_t id, SAcroTaskInfo_t *pInfo);
+
+#endif /* ACROSCHED_USE_INTROSPECTION */
+
+/*----------------------------------------------------------------------------*/
+
+#if (ACROSCHED_USE_STATISTICS == 1)
+
+/**
+ * @brief Returns the per-task dispatch counter (function invocation count).
+ * @details Reports how many times the given task's function has actually been
+ * invoked by the dispatcher since the task was added. The counter is read
+ * inside a critical section so it is consistent with concurrent dispatching.
+ * Enable via ACROSCHED_USE_STATISTICS = 1 in acrosched_config.h.
+ * @param[in]  id     - task ID obtained from acroGetTaskId().
+ * @param[out] pCount - pointer to the variable to fill (must not be NULL).
+ * @returns Operation status.
+ * @retval eAcroOk           Counter written successfully.
+ * @retval eAcroInvalidParam pCount is NULL, or no task with the given id exists.
+ */
+EAcroStatus_t acroGetTaskDispatchCount(uint8_t id, AcroDispatchCount_t *pCount);
+
+/**
+ * @brief Returns the total number of dispatcher iterations executed so far.
+ * @details Counts how many times the cooperative dispatcher has traversed the
+ * task pool since acroReset(). Useful as a profiling denominator together with
+ * the per-task counters. Enable via ACROSCHED_USE_STATISTICS = 1 in
+ * acrosched_config.h.
+ * @returns The dispatcher iteration count.
+ */
+AcroDispatchCount_t acroGetIterationCount(void);
+
+#endif /* ACROSCHED_USE_STATISTICS */
 
 /******************************************************************************/
 #endif //! ACROSCHED_H_

@@ -274,3 +274,19 @@ Records key decisions, structural changes, and completed phases.
 - Both toolchains pass: **AC6 2 succeeded, GCC 2 succeeded** (Debug Code 9338).
 
 ---
+
+## 2026-08-16
+
+### AcroSched library update
+- Updated the AcroSched library to version **2.2.0**.
+- Synced the vendored scheduler headers in `lib/inc/` to the 2.2.0 API and
+  configuration set (`acrosched.h`, `acrosched_config.h`, `acrosched_port.h`,
+  `acrosched_defs.h`, `acrosched_kernel.h`, `acrosched_ipc.h`).
+- Confirmed watchdog integration model is the AcroSched hook:
+  `ACROSCHED_USE_WATCHDOG = 1` enables dispatcher-side calls to
+  `acroWatchdogRefresh()`, while the firmware provides the hardware-specific
+  strong implementation that kicks the MCU IWDG.
+- Current optional modules remain configured as intended for this project:
+  IPC disabled (`ACROSCHED_USE_IPC = 0`), diagnostics hooks disabled
+  (`ACROSCHED_USE_HOOKS = 0`), keeping footprint predictable.
+

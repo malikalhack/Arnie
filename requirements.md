@@ -277,13 +277,16 @@ obstacles.
 
 ### REQ-019 — Watchdog
 
-Arnie shall enable an independent watchdog refreshed from the dispatcher.
+Arnie shall service the MCU independent watchdog via the AcroSched watchdog
+hook in the dispatcher loop.
 
 **Target:** Hardening phase
 
 **Acceptance criteria:**
-- The IWDG is refreshed once per dispatcher iteration via the AcroSched
-  watchdog hook.
+- `ACROSCHED_USE_WATCHDOG` is enabled, so the scheduler calls
+  `acroWatchdogRefresh()` from the dispatcher loop.
+- The firmware provides a strong `acroWatchdogRefresh()` implementation that
+  performs the hardware IWDG reload.
 - A stalled dispatcher (no refresh) resets the MCU within the configured
   timeout.
 
