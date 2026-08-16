@@ -91,8 +91,9 @@ Lidar acquisition, the magnetometer (auto-detect HMC/QMC), the cooperative
 runtime and the dual-toolchain build are working. Motor and encoder drivers are
 implemented and compile-time gated (`MOTOR_ENABLED` / `ENCODER_ENABLED` in
 `app/main.c`) while the hardware is wired. Closed-loop speed control,
-magnetometer calibration, obstacle-avoidance navigation and the independent
-watchdog are planned (see `requirements.md`, REQ-013 onward).
+magnetometer calibration and obstacle-avoidance navigation are planned (see
+`requirements.md`, REQ-015 onward). The independent watchdog is integrated via
+the AcroSched dispatcher hook (`acroWatchdogRefresh()` -> `bspWatchdogKick()`).
 
 ## License
 
